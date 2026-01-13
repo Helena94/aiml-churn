@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+
+# Build/packaging
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+churn-egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+telco-churn/
+venv/
+.venv/
+ENV/
+env/
+.python-version
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Data
+*.csv
+*.xlsx
+*.db
+*.sqlite
+*.json
+kaggle/
+reports/
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+kaggle.json
+
+# Model files
+*.pkl
+*.h5
+*.joblib
