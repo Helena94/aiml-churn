@@ -1,9 +1,7 @@
 """Transform raw data: inspect schema and fix data types."""
-import json
 import re
-from pathlib import Path
-
 import pandas as pd
+from prefect import task
 
 
 def to_snake_case(name: str) -> str:
@@ -539,10 +537,11 @@ def calculate_total_services(df: pd.DataFrame) -> pd.DataFrame:
             return 0
         return 1 if str(val).lower() != "no" else 0
 
-    # Calculate total services
-    df["total_services"] = sum(
-        df[col].apply(has_service) for col in existing_service_cols
-    )
+    # Calculate total services - convert to string first to handle categorical dtype
+    df["total_services"] = pd.concat(
+        [df[col].astype(str).apply(has_service) for col in existing_service_cols],
+        axis=1,
+    ).sum(axis=1).astype(int)
 
     print(f"  Counted services from {len(existing_service_cols)} columns: {existing_service_cols}")
     print(f"  total_services range: {df['total_services'].min()} - {df['total_services'].max()}")
@@ -713,14 +712,14 @@ def validate_transformed_data(df: pd.DataFrame) -> dict:
             if unexpected:
                 warnings.append(f"Column '{col}' has unexpected values: {unexpected}")
 
-    # === 5. Check binary flags are 0/1 ===
-    flag_columns = [col for col in df.columns if col.endswith("_flag")]
-    for col in flag_columns:
-        if col in df.columns:
-            unique_vals = set(df[col].dropna().unique())
-            invalid = unique_vals - {0, 1}
-            if invalid:
-                issues.append(f"Flag column '{col}' has non-binary values: {invalid}")
+    # === 5. Check total_services is valid ===
+    if "total_services" in df.columns:
+        ts_min = df["total_services"].min()
+        ts_max = df["total_services"].max()
+        if ts_min < 0:
+            issues.append(f"total_services has negative values (min: {ts_min})")
+        if ts_max > 9:
+            warnings.append(f"total_services exceeds expected max of 9 (max: {ts_max})")
 
     # === 6. Check for duplicates ===
     n_duplicates = df.duplicated().sum()
@@ -743,7 +742,6 @@ def validate_transformed_data(df: pd.DataFrame) -> dict:
             "total_rows": len(df),
             "total_columns": len(df.columns),
             "missing_value_columns": len(cols_with_missing),
-            "flag_columns": len(flag_columns),
             "duplicate_rows": int(n_duplicates),
         },
     }
@@ -761,32 +759,33 @@ def validate_transformed_data(df: pd.DataFrame) -> dict:
         for warning in warnings:
             print(f"    - {warning}")
 
-    print(f"  Summary: {len(df)} rows, {len(df.columns)} columns, {len(flag_columns)} flag columns")
+    print(f"  Summary: {len(df)} rows, {len(df.columns)} columns")
 
     return validation_result
 
 
-def transform(df: pd.DataFrame, output_dir: str | None = None) -> tuple[pd.DataFrame, dict]:
+@task(name="transform-data")
+def transform_data(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """
-    Main transform function: clean, normalize, and encode data.
+    Main transform function: clean and normalize data.
+
+    Produces a clean canonical table with normalized types and categories.
+    Model-specific encoding (one-hot, label encoding) should happen in
+    training pipelines, not here.
 
     Steps:
-        1. Inspect schema (see original data structure)
-        2. Standardize column names to snake_case
+        1. Standardize column names to snake_case
+        2. Fix numeric types (convert numeric columns)
         3. Remove duplicate rows
-        4. Fix numeric types (convert numeric columns)
-        5. Handle outliers and impossible values
-        6. Handle missing values
-        7. Normalize categorical values (on clean data)
-        8. Convert to category dtype
-        9. Calculate total services
-        10. Create binary flag columns
-        11. Encode multi-class categories
-        12. Validate transformed data
+        4. Normalize categorical values
+        5. Handle missing values
+        6. Handle outliers and impossible values
+        7. Convert to category dtype
+        8. Feature engineering (total_services only)
+        9. Validate transformed data
 
     Args:
         df: Raw DataFrame from extract step
-        output_dir: Directory to save outputs (default: data/processed/)
 
     Returns:
         tuple containing:
@@ -802,28 +801,21 @@ def transform(df: pd.DataFrame, output_dir: str | None = None) -> tuple[pd.DataF
         "steps": {},
     }
 
-    print("=== Inspecting Schema (Original) ===")
-    schema_info = inspect_schema(df)
-    transformation_log["steps"]["schema_inspection"] = schema_info
-
-    print("\n=== Standardizing Column Names ===")
+    # 1. Standardize column names
+    print("=== 1. Standardizing Column Names ===")
     df = standardize_column_names(df)
 
-    print("\n=== Removing Duplicates ===")
+    # 2. Fix numeric types (early, before other processing)
+    print("\n=== 2. Fixing Numeric Types ===")
+    df = fix_numeric_types(df)
+
+    # 3. Remove duplicates
+    print("\n=== 3. Removing Duplicates ===")
     df, duplicates_info = remove_duplicates(df)
     transformation_log["steps"]["remove_duplicates"] = duplicates_info
 
-    print("\n=== Fixing Numeric Types ===")
-    df = fix_numeric_types(df)
-
-    print("\n=== Handling Outliers & Impossible Values ===")
-    df, outliers_info = handle_outliers_and_impossible(df)
-    transformation_log["steps"]["outliers_impossible"] = outliers_info
-
-    print("\n=== Handling Missing Values ===")
-    df = handle_missing_values(df)
-
-    print("\n=== Normalizing Categorical Values ===")
+    # 4. Normalize categorical values
+    print("\n=== 4. Normalizing Categorical Values ===")
     df = normalize_categorical_columns(df)
     transformation_log["steps"]["normalize_categorical"] = {
         "transformations": [
@@ -833,51 +825,33 @@ def transform(df: pd.DataFrame, output_dir: str | None = None) -> tuple[pd.DataF
         ]
     }
 
-    print("\n=== Converting to Category Dtype ===")
+    # 5. Handle missing values
+    print("\n=== 5. Handling Missing Values ===")
+    df = handle_missing_values(df)
+
+    # 6. Handle outliers and impossible values
+    print("\n=== 6. Handling Outliers & Impossible Values ===")
+    df, outliers_info = handle_outliers_and_impossible(df)
+    transformation_log["steps"]["outliers_impossible"] = outliers_info
+
+    # 7. Convert to category dtype (memory efficiency)
+    print("\n=== 7. Converting to Category Dtype ===")
     df = convert_to_category_dtype(df)
 
-    print("\n=== Calculating Total Services ===")
+    # 8. Feature engineering (total_services only - no pre-encoding)
+    print("\n=== 8. Feature Engineering (Total Services) ===")
     df = calculate_total_services(df)
-    transformation_log["steps"]["total_services"] = {
-        "description": "Calculated total number of services per customer"
+    transformation_log["steps"]["feature_engineering"] = {
+        "total_services": "Count of active services per customer"
     }
 
-    print("\n=== Creating Binary Flags ===")
-    df, binary_mappings = create_binary_flags(df)
-    transformation_log["steps"]["binary_flags"] = binary_mappings
-
-    print("\n=== Encoding Multi-Class Categories ===")
-    df, multiclass_mappings = encode_multi_class_categories(df)
-    transformation_log["steps"]["multiclass_encoding"] = multiclass_mappings
-
-    print("\n=== Validating Transformed Data ===")
+    # 9. Validate transformed data
+    print("\n=== 9. Validating Transformed Data ===")
     validation_result = validate_transformed_data(df)
     transformation_log["steps"]["validation"] = validation_result
 
     transformation_log["final_shape"] = {"rows": len(df), "columns": len(df.columns)}
     transformation_log["final_columns"] = list(df.columns)
-
-    # Save transformed data and log to data/processed folder
-    if output_dir is None:
-        project_root = Path(__file__).parent.parent.parent
-        output_dir = project_root / "data" / "processed"
-    else:
-        output_dir = Path(output_dir)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save transformed DataFrame as CSV
-    csv_path = output_dir / "churn_cleaned.csv"
-    df.to_csv(csv_path, index=False)
-    print(f"\n=== Transformed Data Saved ===")
-    print(f"  {csv_path}")
-
-    # Save transformation log to JSON
-    log_path = output_dir / "transformation_log.json"
-    with open(log_path, "w") as f:
-        json.dump(transformation_log, f, indent=2)
-    print(f"\n=== Transformation Log Saved ===")
-    print(f"  {log_path}")
 
     print("\n=== Final Schema ===")
     print(df.dtypes)
