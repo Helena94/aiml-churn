@@ -1,7 +1,9 @@
 """Transform raw data: inspect schema and fix data types."""
+
+from datetime import timedelta
 import re
 import pandas as pd
-from prefect import task
+from prefect import flow, task
 
 
 def to_snake_case(name: str) -> str:
@@ -19,6 +21,8 @@ def to_snake_case(name: str) -> str:
     return s5.lower().strip("_")
 
 
+
+@task(name="standardize_column_names")
 def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     """
     Standardize all column names to snake_case.
@@ -41,7 +45,10 @@ def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def remove_duplicates(df: pd.DataFrame, subset: list[str] | None = None) -> tuple[pd.DataFrame, dict]:
+@task(name="remove_duplicates")
+def remove_duplicates(
+    df: pd.DataFrame, subset: list[str] | None = None
+) -> tuple[pd.DataFrame, dict]:
     """
     Remove duplicate rows from the DataFrame.
 
@@ -175,7 +182,9 @@ def handle_outliers_and_impossible(df: pd.DataFrame) -> tuple[pd.DataFrame, dict
                 "lower_capped": int(lower_outliers),
                 "upper_capped": int(upper_outliers),
             }
-            print(f"  {col}: capped {lower_outliers} low, {upper_outliers} high outliers")
+            print(
+                f"  {col}: capped {lower_outliers} low, {upper_outliers} high outliers"
+            )
 
     if not changes["impossible_values"] and not changes["outliers_capped"]:
         print("  No impossible values or outliers found")
@@ -204,23 +213,29 @@ def inspect_schema(df: pd.DataFrame) -> dict:
             # Check if column contains numeric values stored as text
             numeric_converted = pd.to_numeric(df[col], errors="coerce")
             numeric_count = numeric_converted.notna().sum()
-            null_after_conversion = numeric_converted.isna().sum() - df[col].isna().sum()
+            null_after_conversion = (
+                numeric_converted.isna().sum() - df[col].isna().sum()
+            )
 
             if numeric_count > len(df) * 0.5:
-                issues.append({
-                    "column": col,
-                    "issue": "numeric_as_text",
-                    "current_dtype": str(df[col].dtype),
-                    "numeric_values": int(numeric_count),
-                    "failed_conversions": int(null_after_conversion),
-                })
+                issues.append(
+                    {
+                        "column": col,
+                        "issue": "numeric_as_text",
+                        "current_dtype": str(df[col].dtype),
+                        "numeric_values": int(numeric_count),
+                        "failed_conversions": int(null_after_conversion),
+                    }
+                )
             # Low cardinality = likely categorical
             elif unique_ratio < 0.05 or unique_count <= 10:
-                categorical_info.append({
-                    "column": col,
-                    "unique_values": int(unique_count),
-                    "values": list(df[col].unique()),
-                })
+                categorical_info.append(
+                    {
+                        "column": col,
+                        "unique_values": int(unique_count),
+                        "values": list(df[col].unique()),
+                    }
+                )
 
     schema_info = {
         "columns": {col: str(dtype) for col, dtype in df.dtypes.items()},
@@ -229,11 +244,17 @@ def inspect_schema(df: pd.DataFrame) -> dict:
         "categorical_candidates": categorical_info,
     }
 
-    print(f"Schema inspection: {len(issues)} type issues, {len(categorical_info)} categorical columns")
+    print(
+        f"Schema inspection: {len(issues)} type issues, {len(categorical_info)} categorical columns"
+    )
     for issue in issues:
-        print(f"  - {issue['column']}: {issue['issue']} ({issue['failed_conversions']} problematic values)")
+        print(
+            f"  - {issue['column']}: {issue['issue']} ({issue['failed_conversions']} problematic values)"
+        )
     for cat in categorical_info:
-        print(f"  - {cat['column']}: categorical ({cat['unique_values']} unique values)")
+        print(
+            f"  - {cat['column']}: categorical ({cat['unique_values']} unique values)"
+        )
 
     return schema_info
 
@@ -266,7 +287,9 @@ def fix_numeric_types(df: pd.DataFrame) -> pd.DataFrame:
             new_nulls = df[col].isna().sum()
 
             if new_nulls > original_nulls:
-                print(f"  {col}: -> numeric ({new_nulls - original_nulls} values became NaN)")
+                print(
+                    f"  {col}: -> numeric ({new_nulls - original_nulls} values became NaN)"
+                )
             else:
                 print(f"  {col}: -> numeric")
 
@@ -294,10 +317,22 @@ def convert_to_category_dtype(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     categorical_columns = [
-        "gender", "partner", "dependents", "phone_service", "multiple_lines",
-        "internet_service", "online_security", "online_backup", "device_protection",
-        "tech_support", "streaming_tv", "streaming_movies", "contract",
-        "paperless_billing", "payment_method", "churn"
+        "gender",
+        "partner",
+        "dependents",
+        "phone_service",
+        "multiple_lines",
+        "internet_service",
+        "online_security",
+        "online_backup",
+        "device_protection",
+        "tech_support",
+        "streaming_tv",
+        "streaming_movies",
+        "contract",
+        "paperless_billing",
+        "payment_method",
+        "churn",
     ]
 
     for col in categorical_columns:
@@ -357,7 +392,9 @@ def handle_missing_values(
             else:
                 fill_value = df[col].mean()
             df[col] = df[col].fillna(fill_value)
-            print(f"  {col}: filled {missing_count} missing with {numeric_strategy}={fill_value:.2f}")
+            print(
+                f"  {col}: filled {missing_count} missing with {numeric_strategy}={fill_value:.2f}"
+            )
 
     # Handle categorical columns
     categorical_cols = df.select_dtypes(include=["object", "category"]).columns
@@ -376,6 +413,7 @@ def handle_missing_values(
     print(f"Total missing values after: {total_remaining}")
 
     return df
+
 
 def normalize_categorical_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -538,13 +576,21 @@ def calculate_total_services(df: pd.DataFrame) -> pd.DataFrame:
         return 1 if str(val).lower() != "no" else 0
 
     # Calculate total services - convert to string first to handle categorical dtype
-    df["total_services"] = pd.concat(
-        [df[col].astype(str).apply(has_service) for col in existing_service_cols],
-        axis=1,
-    ).sum(axis=1).astype(int)
+    df["total_services"] = (
+        pd.concat(
+            [df[col].astype(str).apply(has_service) for col in existing_service_cols],
+            axis=1,
+        )
+        .sum(axis=1)
+        .astype(int)
+    )
 
-    print(f"  Counted services from {len(existing_service_cols)} columns: {existing_service_cols}")
-    print(f"  total_services range: {df['total_services'].min()} - {df['total_services'].max()}")
+    print(
+        f"  Counted services from {len(existing_service_cols)} columns: {existing_service_cols}"
+    )
+    print(
+        f"  total_services range: {df['total_services'].min()} - {df['total_services'].max()}"
+    )
 
     return df
 
@@ -665,7 +711,9 @@ def validate_transformed_data(df: pd.DataFrame) -> dict:
         if col in df.columns:
             actual_type = str(df[col].dtype)
             if actual_type not in valid_types:
-                warnings.append(f"Column '{col}' has type '{actual_type}', expected one of {valid_types}")
+                warnings.append(
+                    f"Column '{col}' has type '{actual_type}', expected one of {valid_types}"
+                )
 
     # === 3. Check numeric ranges ===
     numeric_ranges = {
@@ -681,9 +729,13 @@ def validate_transformed_data(df: pd.DataFrame) -> dict:
             col_min = df[col].min()
             col_max = df[col].max()
             if col_min < ranges["min"]:
-                issues.append(f"Column '{col}' has values below {ranges['min']} (min: {col_min})")
+                issues.append(
+                    f"Column '{col}' has values below {ranges['min']} (min: {col_min})"
+                )
             if col_max > ranges["max"]:
-                warnings.append(f"Column '{col}' has values above {ranges['max']} (max: {col_max})")
+                warnings.append(
+                    f"Column '{col}' has values above {ranges['max']} (max: {col_max})"
+                )
 
     # === 4. Check categorical values ===
     expected_categories = {
@@ -730,7 +782,9 @@ def validate_transformed_data(df: pd.DataFrame) -> dict:
     if "customer_id" in df.columns:
         n_unique_ids = df["customer_id"].nunique()
         if n_unique_ids != len(df):
-            issues.append(f"customer_id is not unique: {n_unique_ids} unique vs {len(df)} rows")
+            issues.append(
+                f"customer_id is not unique: {n_unique_ids} unique vs {len(df)} rows"
+            )
 
     # === Build validation result ===
     is_valid = len(issues) == 0
@@ -764,8 +818,15 @@ def validate_transformed_data(df: pd.DataFrame) -> dict:
     return validation_result
 
 
-@task(name="transform-data")
-def transform_data(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+@task(
+    name="transform-data",
+    retry_delay_seconds=[2, 4, 8],
+    cache_key_fn=lambda ctx, params: params["raw_hash"],
+    cache_expiration=timedelta(days=3),
+)
+def transform_data(
+    df: pd.DataFrame, raw_hash: str, logger=None
+) -> tuple[pd.DataFrame, dict]:
     """
     Main transform function: clean and normalize data.
 
@@ -786,6 +847,7 @@ def transform_data(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
     Args:
         df: Raw DataFrame from extract step
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         tuple containing:
@@ -802,20 +864,24 @@ def transform_data(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     }
 
     # 1. Standardize column names
-    print("=== 1. Standardizing Column Names ===")
+    if logger:
+        logger.info("=== 1. Standardizing Column Names ===")
     df = standardize_column_names(df)
 
     # 2. Fix numeric types (early, before other processing)
-    print("\n=== 2. Fixing Numeric Types ===")
+    if logger:
+        logger.info("=== 2. Fixing Numeric Types ===")
     df = fix_numeric_types(df)
 
     # 3. Remove duplicates
-    print("\n=== 3. Removing Duplicates ===")
+    if logger:
+        logger.info("=== 3. Removing Duplicates ===")
     df, duplicates_info = remove_duplicates(df)
     transformation_log["steps"]["remove_duplicates"] = duplicates_info
 
     # 4. Normalize categorical values
-    print("\n=== 4. Normalizing Categorical Values ===")
+    if logger:
+        logger.info("=== 4. Normalizing Categorical Values ===")
     df = normalize_categorical_columns(df)
     transformation_log["steps"]["normalize_categorical"] = {
         "transformations": [
@@ -826,26 +892,32 @@ def transform_data(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     }
 
     # 5. Handle missing values
-    print("\n=== 5. Handling Missing Values ===")
+    if logger:
+        logger.info("=== 5. Handling Missing Values ===")
     df = handle_missing_values(df)
 
     # 6. Handle outliers and impossible values
-    print("\n=== 6. Handling Outliers & Impossible Values ===")
+    if logger:
+        logger.info("=== 6. Handling Outliers & Impossible Values ===")
     df, outliers_info = handle_outliers_and_impossible(df)
     transformation_log["steps"]["outliers_impossible"] = outliers_info
 
     # 7. Convert to category dtype (memory efficiency)
-    print("\n=== 7. Converting to Category Dtype ===")
+    if logger:
+        logger.info("=== 7. Converting to Category Dtype ===")
     df = convert_to_category_dtype(df)
 
     # 8. Feature engineering (total_services only - no pre-encoding)
-    print("\n=== 8. Feature Engineering (Total Services) ===")
+    if logger:
+        logger.info("=== 8. Feature Engineering (Total Services) ===")
     df = calculate_total_services(df)
     transformation_log["steps"]["feature_engineering"] = {
         "total_services": "Count of active services per customer"
     }
 
     # 9. Validate transformed data
+    if logger:
+        logger.info("=== 9. Validating Transformed Data ===")
     print("\n=== 9. Validating Transformed Data ===")
     validation_result = validate_transformed_data(df)
     transformation_log["steps"]["validation"] = validation_result
@@ -853,8 +925,11 @@ def transform_data(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     transformation_log["final_shape"] = {"rows": len(df), "columns": len(df.columns)}
     transformation_log["final_columns"] = list(df.columns)
 
-    print("\n=== Final Schema ===")
-    print(df.dtypes)
+    if logger:
+        logger.info("=== Final Schema ===")
+        logger.info(f"\n{df.dtypes}")
+        logger.info(
+            f"Transformation complete. Final shape: {len(df)} rows, {len(df.columns)} columns."
+        )
 
     return df, transformation_log
- 

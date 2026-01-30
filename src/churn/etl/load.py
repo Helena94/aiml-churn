@@ -1,10 +1,20 @@
 import json
 import pandas as pd
 from prefect import task
+from prefect.assets import materialize
 
 
 @task(name="load_data")
-def load_data(df: pd.DataFrame, transformation_log: dict, output_dir: str | None = None) -> None:
+@materialize(
+    "file://data/processed/transformation_log.json",
+    "file://data/processed/churn_cleaned.csv",
+)
+def load_data(
+    df: pd.DataFrame,
+    transformation_log: dict,
+    output_dir: str | None = None,
+    logger=None,
+) -> None:
     """
     Load the transformed data and schema information to disk.
 
@@ -12,19 +22,26 @@ def load_data(df: pd.DataFrame, transformation_log: dict, output_dir: str | None
         df: Transformed DataFrame to save
         transformation_log: Transformation log dictionary
         output_dir: Directory to save outputs (default: data/processed/)
+        logger: Optional Prefect logger for logging progress
     Returns:
         None
     """
-    
+
+    if logger:
+        logger.info("Loading transformed data to disk...")
     output_dir = output_dir / "processed"
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = output_dir / "churn_cleaned.csv"
     df.to_csv(csv_path, index=False)
-    print(f"  Saved: {csv_path}")
+    if logger:
+        logger.info(f"  Saved: {csv_path}")
 
+    if logger:
+        logger.info("Saving transformation log...")
     log_path = output_dir / "transformation_log.json"
     with open(log_path, "w") as f:
         json.dump(transformation_log, f, indent=2)
-    print(f"  Saved: {log_path}")
+    if logger:
+        logger.info(f"  Saved: {log_path}")
