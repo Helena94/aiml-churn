@@ -23,4 +23,9 @@ where = ["src"]
 dev = [
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
+    "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = ["ignore::pytest.PytestUnraisableExceptionWarning"]
+log_cli = false

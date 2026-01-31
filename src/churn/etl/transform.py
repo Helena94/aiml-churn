@@ -21,14 +21,13 @@ def to_snake_case(name: str) -> str:
     return s5.lower().strip("_")
 
 
-
-@task(name="standardize_column_names")
-def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
+def standardize_column_names(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     """
     Standardize all column names to snake_case.
 
     Args:
         df: DataFrame with original column names
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         DataFrame with snake_case column names
@@ -36,18 +35,17 @@ def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     rename_map = {col: to_snake_case(col) for col in df.columns}
 
-    # Print renamed columns
+    # Log renamed columns
     for old, new in rename_map.items():
         if old != new:
-            print(f"  {old} -> {new}")
+            if logger:
+                logger.info(f"  {old} -> {new}")
 
     df.columns = [rename_map[col] for col in df.columns]
     return df
 
-
-@task(name="remove_duplicates")
 def remove_duplicates(
-    df: pd.DataFrame, subset: list[str] | None = None
+    df: pd.DataFrame, subset: list[str] | None = None, logger=None
 ) -> tuple[pd.DataFrame, dict]:
     """
     Remove duplicate rows from the DataFrame.
@@ -55,6 +53,7 @@ def remove_duplicates(
     Args:
         df: DataFrame with potential duplicates
         subset: Columns to consider for identifying duplicates (default: all columns)
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         tuple containing:
@@ -74,9 +73,11 @@ def remove_duplicates(
 
     if n_duplicates > 0:
         df = df[~duplicates]
-        print(f"  Removed {n_duplicates} duplicate rows")
+        if logger:
+            logger.info(f"  Removed {n_duplicates} duplicate rows")
     else:
-        print("  No duplicate rows found")
+        if logger:
+            logger.info("  No duplicate rows found")
 
     info = {
         "initial_rows": initial_rows,
@@ -88,7 +89,9 @@ def remove_duplicates(
     return df, info
 
 
-def handle_outliers_and_impossible(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+def handle_outliers_and_impossible(
+    df: pd.DataFrame, logger=None
+) -> tuple[pd.DataFrame, dict]:
     """
     Handle impossible values and outliers in the DataFrame.
 
@@ -103,6 +106,7 @@ def handle_outliers_and_impossible(df: pd.DataFrame) -> tuple[pd.DataFrame, dict
 
     Args:
         df: DataFrame with potential outliers/impossible values
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         tuple containing:
@@ -134,7 +138,8 @@ def handle_outliers_and_impossible(df: pd.DataFrame) -> tuple[pd.DataFrame, dict
             if n_invalid > 0:
                 df.loc[invalid_mask, col] = pd.NA
                 col_changes["invalid_replaced"] = int(n_invalid)
-                print(f"  {col}: {n_invalid} impossible values -> NaN")
+                if logger:
+                    logger.info(f"  {col}: {n_invalid} impossible values -> NaN")
         else:
             # For range constraints
             if rules.get("min") is not None:
@@ -143,7 +148,8 @@ def handle_outliers_and_impossible(df: pd.DataFrame) -> tuple[pd.DataFrame, dict
                 if n_invalid > 0:
                     df.loc[invalid_mask, col] = pd.NA
                     col_changes["below_min"] = int(n_invalid)
-                    print(f"  {col}: {n_invalid} values below {rules['min']} -> NaN")
+                    if logger:
+                        logger.info(f"  {col}: {n_invalid} values below {rules['min']} -> NaN")
 
             if rules.get("max") is not None:
                 invalid_mask = df[col] > rules["max"]
@@ -151,7 +157,8 @@ def handle_outliers_and_impossible(df: pd.DataFrame) -> tuple[pd.DataFrame, dict
                 if n_invalid > 0:
                     df.loc[invalid_mask, col] = pd.NA
                     col_changes["above_max"] = int(n_invalid)
-                    print(f"  {col}: {n_invalid} values above {rules['max']} -> NaN")
+                    if logger:
+                        logger.info(f"  {col}: {n_invalid} values above {rules['max']} -> NaN")
 
         col_changes["after"] = int(df[col].isna().sum())
         if col_changes["after"] > col_changes["before"]:
@@ -182,22 +189,25 @@ def handle_outliers_and_impossible(df: pd.DataFrame) -> tuple[pd.DataFrame, dict
                 "lower_capped": int(lower_outliers),
                 "upper_capped": int(upper_outliers),
             }
-            print(
-                f"  {col}: capped {lower_outliers} low, {upper_outliers} high outliers"
-            )
+            if logger:
+                logger.info(
+                    f"  {col}: capped {lower_outliers} low, {upper_outliers} high outliers"
+                )
 
     if not changes["impossible_values"] and not changes["outliers_capped"]:
-        print("  No impossible values or outliers found")
+        if logger:
+            logger.info("  No impossible values or outliers found")
 
     return df, changes
 
 
-def inspect_schema(df: pd.DataFrame) -> dict:
+def inspect_schema(df: pd.DataFrame, logger=None) -> dict:
     """
     Inspect DataFrame schema and identify potential data type issues.
 
     Args:
         df: Raw DataFrame to inspect
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         dict with schema info and detected issues
@@ -244,22 +254,23 @@ def inspect_schema(df: pd.DataFrame) -> dict:
         "categorical_candidates": categorical_info,
     }
 
-    print(
-        f"Schema inspection: {len(issues)} type issues, {len(categorical_info)} categorical columns"
-    )
-    for issue in issues:
-        print(
-            f"  - {issue['column']}: {issue['issue']} ({issue['failed_conversions']} problematic values)"
+    if logger:
+        logger.info(
+            f"Schema inspection: {len(issues)} type issues, {len(categorical_info)} categorical columns"
         )
-    for cat in categorical_info:
-        print(
-            f"  - {cat['column']}: categorical ({cat['unique_values']} unique values)"
-        )
+        for issue in issues:
+            logger.info(
+                f"  - {issue['column']}: {issue['issue']} ({issue['failed_conversions']} problematic values)"
+            )
+        for cat in categorical_info:
+            logger.info(
+                f"  - {cat['column']}: categorical ({cat['unique_values']} unique values)"
+            )
 
     return schema_info
 
 
-def fix_numeric_types(df: pd.DataFrame) -> pd.DataFrame:
+def fix_numeric_types(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     """
     Fix numeric data types: convert numeric columns from object to numeric, keep IDs as strings.
 
@@ -267,6 +278,7 @@ def fix_numeric_types(df: pd.DataFrame) -> pd.DataFrame:
 
     Args:
         df: DataFrame with potential type issues
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         DataFrame with numeric columns converted
@@ -286,23 +298,25 @@ def fix_numeric_types(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
             new_nulls = df[col].isna().sum()
 
-            if new_nulls > original_nulls:
-                print(
-                    f"  {col}: -> numeric ({new_nulls - original_nulls} values became NaN)"
-                )
-            else:
-                print(f"  {col}: -> numeric")
+            if logger:
+                if new_nulls > original_nulls:
+                    logger.info(
+                        f"  {col}: -> numeric ({new_nulls - original_nulls} values became NaN)"
+                    )
+                else:
+                    logger.info(f"  {col}: -> numeric")
 
     # Ensure ID columns stay as strings
     for col in id_columns:
         if col in df.columns:
             df[col] = df[col].astype(str)
-            print(f"  {col}: -> string (ID)")
+            if logger:
+                logger.info(f"  {col}: -> string (ID)")
 
     return df
 
 
-def convert_to_category_dtype(df: pd.DataFrame) -> pd.DataFrame:
+def convert_to_category_dtype(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     """
     Convert categorical columns to pandas category dtype for memory efficiency.
 
@@ -310,6 +324,7 @@ def convert_to_category_dtype(df: pd.DataFrame) -> pd.DataFrame:
 
     Args:
         df: DataFrame with normalized categorical columns (still object dtype)
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         DataFrame with categorical columns converted to category dtype
@@ -338,7 +353,8 @@ def convert_to_category_dtype(df: pd.DataFrame) -> pd.DataFrame:
     for col in categorical_columns:
         if col in df.columns:
             df[col] = df[col].astype("category")
-            print(f"  {col}: -> category")
+            if logger:
+                logger.info(f"  {col}: -> category")
 
     return df
 
@@ -348,6 +364,7 @@ def handle_missing_values(
     numeric_strategy: str = "median",
     categorical_fill: str = "Unknown",
     drop_threshold: float | None = None,
+    logger=None,
 ) -> pd.DataFrame:
     """
     Handle missing values in the DataFrame.
@@ -357,6 +374,7 @@ def handle_missing_values(
         numeric_strategy: Strategy for numeric columns - "mean" or "median"
         categorical_fill: Value to fill missing categorical values
         drop_threshold: If set, drop rows with more than this fraction of missing values (0.0-1.0)
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         DataFrame with missing values handled
@@ -366,10 +384,12 @@ def handle_missing_values(
     # Report initial missing values
     missing_before = df.isna().sum()
     total_missing = missing_before.sum()
-    print(f"Total missing values before: {total_missing}")
+    if logger:
+        logger.info(f"Total missing values before: {total_missing}")
 
     if total_missing == 0:
-        print("No missing values found.")
+        if logger:
+            logger.info("No missing values found.")
         return df
 
     # Optionally drop rows with too many missing values
@@ -380,7 +400,8 @@ def handle_missing_values(
         if rows_to_drop.any():
             n_dropped = rows_to_drop.sum()
             df = df[~rows_to_drop]
-            print(f"Dropped {n_dropped} rows with >{drop_threshold:.0%} missing values")
+            if logger:
+                logger.info(f"Dropped {n_dropped} rows with >{drop_threshold:.0%} missing values")
 
     # Handle numeric columns
     numeric_cols = df.select_dtypes(include=["number"]).columns
@@ -392,9 +413,10 @@ def handle_missing_values(
             else:
                 fill_value = df[col].mean()
             df[col] = df[col].fillna(fill_value)
-            print(
-                f"  {col}: filled {missing_count} missing with {numeric_strategy}={fill_value:.2f}"
-            )
+            if logger:
+                logger.info(
+                    f"  {col}: filled {missing_count} missing with {numeric_strategy}={fill_value:.2f}"
+                )
 
     # Handle categorical columns
     categorical_cols = df.select_dtypes(include=["object", "category"]).columns
@@ -406,16 +428,18 @@ def handle_missing_values(
                 if categorical_fill not in df[col].cat.categories:
                     df[col] = df[col].cat.add_categories([categorical_fill])
             df[col] = df[col].fillna(categorical_fill)
-            print(f"  {col}: filled {missing_count} missing with '{categorical_fill}'")
+            if logger:
+                logger.info(f"  {col}: filled {missing_count} missing with '{categorical_fill}'")
 
     # Report final state
     total_remaining = df.isna().sum().sum()
-    print(f"Total missing values after: {total_remaining}")
+    if logger:
+        logger.info(f"Total missing values after: {total_remaining}")
 
     return df
 
 
-def normalize_categorical_columns(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_categorical_columns(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     """
     Normalize categorical columns: trim whitespace, unify labels, standardize casing.
 
@@ -426,6 +450,7 @@ def normalize_categorical_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     Args:
         df: DataFrame with categorical columns
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         DataFrame with normalized categorical columns
@@ -454,7 +479,8 @@ def normalize_categorical_columns(df: pd.DataFrame) -> pd.DataFrame:
         new_values = df[col].unique()
         changed = set(original_values) != set(new_values)
         if changed:
-            print(f"  {col}: normalized values")
+            if logger:
+                logger.info(f"  {col}: normalized values")
 
     return df
 
@@ -462,6 +488,7 @@ def normalize_categorical_columns(df: pd.DataFrame) -> pd.DataFrame:
 def create_binary_flags(
     df: pd.DataFrame,
     exclude_columns: list[str] | None = None,
+    logger=None,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Create binary flag columns (1/0) from categorical columns with exactly 2 unique values.
@@ -472,6 +499,7 @@ def create_binary_flags(
     Args:
         df: DataFrame with categorical columns
         exclude_columns: Columns to skip (e.g., IDs)
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         tuple containing:
@@ -522,15 +550,17 @@ def create_binary_flags(
         mappings[flag_col] = {"source_column": col, "mapping": mapping}
 
         mapping_str = ", ".join(f"{k}={v}" for k, v in mapping.items())
-        print(f"  {col} -> {flag_col}: {mapping_str}")
+        if logger:
+            logger.info(f"  {col} -> {flag_col}: {mapping_str}")
 
     if not mappings:
-        print("  No columns with exactly 2 unique values found")
+        if logger:
+            logger.info("  No columns with exactly 2 unique values found")
 
     return df, mappings
 
 
-def calculate_total_services(df: pd.DataFrame) -> pd.DataFrame:
+def calculate_total_services(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     """
     Calculate total number of services per customer.
 
@@ -544,6 +574,7 @@ def calculate_total_services(df: pd.DataFrame) -> pd.DataFrame:
 
     Args:
         df: DataFrame with service columns
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         DataFrame with 'total_services' column added
@@ -566,7 +597,8 @@ def calculate_total_services(df: pd.DataFrame) -> pd.DataFrame:
     existing_service_cols = [col for col in service_columns if col in df.columns]
 
     if not existing_service_cols:
-        print("  No service columns found")
+        if logger:
+            logger.info("  No service columns found")
         return df
 
     # Count services: 1 if value is not 'No', 0 otherwise
@@ -585,12 +617,13 @@ def calculate_total_services(df: pd.DataFrame) -> pd.DataFrame:
         .astype(int)
     )
 
-    print(
-        f"  Counted services from {len(existing_service_cols)} columns: {existing_service_cols}"
-    )
-    print(
-        f"  total_services range: {df['total_services'].min()} - {df['total_services'].max()}"
-    )
+    if logger:
+        logger.info(
+            f"  Counted services from {len(existing_service_cols)} columns: {existing_service_cols}"
+        )
+        logger.info(
+            f"  total_services range: {df['total_services'].min()} - {df['total_services'].max()}"
+        )
 
     return df
 
@@ -600,6 +633,7 @@ def encode_multi_class_categories(
     min_unique: int = 3,
     max_unique: int = 10,
     exclude_columns: list[str] | None = None,
+    logger=None,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Create encoded columns for categorical columns with 3-10 unique values.
@@ -612,6 +646,7 @@ def encode_multi_class_categories(
         min_unique: Minimum unique values to encode (default: 3)
         max_unique: Maximum unique values to encode (default: 10)
         exclude_columns: Columns to skip (e.g., IDs)
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         tuple containing:
@@ -651,15 +686,17 @@ def encode_multi_class_categories(
         mappings[encoded_col] = {"source_column": col, "mapping": mapping}
 
         mapping_str = ", ".join(f"{v}={k}" for v, k in mapping.items())
-        print(f"  {col} -> {encoded_col}: {mapping_str}")
+        if logger:
+            logger.info(f"  {col} -> {encoded_col}: {mapping_str}")
 
     if not mappings:
-        print("  No columns with 3-10 unique values found")
+        if logger:
+            logger.info("  No columns with 3-10 unique values found")
 
     return df, mappings
 
 
-def validate_transformed_data(df: pd.DataFrame) -> dict:
+def validate_transformed_data(df: pd.DataFrame, logger=None) -> dict:
     """
     Validate the transformed DataFrame meets all expectations.
 
@@ -673,6 +710,7 @@ def validate_transformed_data(df: pd.DataFrame) -> dict:
 
     Args:
         df: Transformed DataFrame to validate
+        logger: Optional Prefect logger for logging progress
 
     Returns:
         dict with validation results and any issues found
@@ -800,20 +838,21 @@ def validate_transformed_data(df: pd.DataFrame) -> dict:
         },
     }
 
-    # Print results
-    if is_valid:
-        print("  ✓ All validations passed")
-    else:
-        print(f"  ✗ {len(issues)} issue(s) found:")
-        for issue in issues:
-            print(f"    - {issue}")
+    # Log results
+    if logger:
+        if is_valid:
+            logger.info("  All validations passed")
+        else:
+            logger.info(f"  {len(issues)} issue(s) found:")
+            for issue in issues:
+                logger.info(f"    - {issue}")
 
-    if warnings:
-        print(f"  ⚠ {len(warnings)} warning(s):")
-        for warning in warnings:
-            print(f"    - {warning}")
+        if warnings:
+            logger.info(f"  {len(warnings)} warning(s):")
+            for warning in warnings:
+                logger.info(f"    - {warning}")
 
-    print(f"  Summary: {len(df)} rows, {len(df.columns)} columns")
+        logger.info(f"  Summary: {len(df)} rows, {len(df.columns)} columns")
 
     return validation_result
 
@@ -866,23 +905,23 @@ def transform_data(
     # 1. Standardize column names
     if logger:
         logger.info("=== 1. Standardizing Column Names ===")
-    df = standardize_column_names(df)
+    df = standardize_column_names(df, logger=logger)
 
     # 2. Fix numeric types (early, before other processing)
     if logger:
         logger.info("=== 2. Fixing Numeric Types ===")
-    df = fix_numeric_types(df)
+    df = fix_numeric_types(df, logger=logger)
 
     # 3. Remove duplicates
     if logger:
         logger.info("=== 3. Removing Duplicates ===")
-    df, duplicates_info = remove_duplicates(df)
+    df, duplicates_info = remove_duplicates(df, logger=logger)
     transformation_log["steps"]["remove_duplicates"] = duplicates_info
 
     # 4. Normalize categorical values
     if logger:
         logger.info("=== 4. Normalizing Categorical Values ===")
-    df = normalize_categorical_columns(df)
+    df = normalize_categorical_columns(df, logger=logger)
     transformation_log["steps"]["normalize_categorical"] = {
         "transformations": [
             "Trimmed whitespace",
@@ -894,23 +933,23 @@ def transform_data(
     # 5. Handle missing values
     if logger:
         logger.info("=== 5. Handling Missing Values ===")
-    df = handle_missing_values(df)
+    df = handle_missing_values(df, logger=logger)
 
     # 6. Handle outliers and impossible values
     if logger:
         logger.info("=== 6. Handling Outliers & Impossible Values ===")
-    df, outliers_info = handle_outliers_and_impossible(df)
+    df, outliers_info = handle_outliers_and_impossible(df, logger=logger)
     transformation_log["steps"]["outliers_impossible"] = outliers_info
 
     # 7. Convert to category dtype (memory efficiency)
     if logger:
         logger.info("=== 7. Converting to Category Dtype ===")
-    df = convert_to_category_dtype(df)
+    df = convert_to_category_dtype(df, logger=logger)
 
     # 8. Feature engineering (total_services only - no pre-encoding)
     if logger:
         logger.info("=== 8. Feature Engineering (Total Services) ===")
-    df = calculate_total_services(df)
+    df = calculate_total_services(df, logger=logger)
     transformation_log["steps"]["feature_engineering"] = {
         "total_services": "Count of active services per customer"
     }
@@ -918,8 +957,7 @@ def transform_data(
     # 9. Validate transformed data
     if logger:
         logger.info("=== 9. Validating Transformed Data ===")
-    print("\n=== 9. Validating Transformed Data ===")
-    validation_result = validate_transformed_data(df)
+    validation_result = validate_transformed_data(df, logger=logger)
     transformation_log["steps"]["validation"] = validation_result
 
     transformation_log["final_shape"] = {"rows": len(df), "columns": len(df.columns)}
