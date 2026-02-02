@@ -860,7 +860,7 @@ def validate_transformed_data(df: pd.DataFrame, logger=None) -> dict:
 @task(
     name="transform-data",
     retry_delay_seconds=[2, 4, 8],
-    cache_key_fn=lambda ctx, params: params["raw_hash"],
+    cache_key_fn=lambda params: params["raw_hash"],
     cache_expiration=timedelta(days=3),
 )
 def transform_data(
