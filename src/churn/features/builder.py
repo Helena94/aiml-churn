@@ -1,5 +1,3 @@
-# src/churn/features/builder.py
-
 import pandas as pd
 from churn.features.schema import ID_COLUMNS, TARGET_COL, ID_COLS, TARGET_COLUMN
 

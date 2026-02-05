@@ -5,7 +5,7 @@ from sklearn.linear_model import LogisticRegression
 from churn.features.preprocessing import build_preprocessor
 
 
-def logistic_regression_model():
+def build_logistic_regression_model(param_grid=None, SearchCVConfig=None, StratifiedKFoldConfig=None):
     """
     Returns a GridSearchCV object
     for Logistic Regression.
@@ -16,7 +16,7 @@ def logistic_regression_model():
             ("model", LogisticRegression(max_iter=500)),
         ]
     )
-    param_grid = [
+    param_grid = param_grid or [
         # L2 and no penalty - works with lbfgs
         {
             "model__C": [0.01, 0.1, 1.0, 10.0],
@@ -41,15 +41,19 @@ def logistic_regression_model():
         },
     ]
 
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    cv = StratifiedKFold(
+        n_splits=StratifiedKFoldConfig.get("n_splits", 5) if StratifiedKFoldConfig else 5,
+        shuffle=StratifiedKFoldConfig.get("shuffle", True) if StratifiedKFoldConfig else True,
+        random_state=StratifiedKFoldConfig.get("random_state", 42) if StratifiedKFoldConfig else 42,
+    )
 
     search = GridSearchCV(
         estimator=pipe,
         param_grid=param_grid,
-        scoring="roc_auc",
-        cv=cv,
-        n_jobs=-1,
-        verbose=1,
+        scoring=SearchCVConfig.get("scoring", "roc_auc") if SearchCVConfig else "roc_auc",
+        cv=SearchCVConfig.get("cv", cv) if SearchCVConfig else cv,
+        n_jobs=SearchCVConfig.get("n_jobs", -1) if SearchCVConfig else -1,
+        verbose=SearchCVConfig.get("verbose", 1) if SearchCVConfig else 1,
     )
 
     return search

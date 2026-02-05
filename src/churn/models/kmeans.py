@@ -14,7 +14,7 @@ def _silhouette_scorer(estimator, X):
     return silhouette_score(X, labels)
 
 
-def kmeans_model():
+def build_kmeans_model(params_grid=None, SearchCVConfig=None):
     """
     Returns a GridSearchCV object
     for KMeans clustering.
@@ -26,7 +26,7 @@ def kmeans_model():
         ]
     )
 
-    param_grid = {
+    param_grid = params_grid or {
         "model__n_clusters": [2, 3, 4, 5, 6, 7, 8],
     }
 
@@ -34,9 +34,9 @@ def kmeans_model():
         pipe,
         param_grid=param_grid,
         scoring=_silhouette_scorer,
-        cv=5,
-        n_jobs=-1,
-        verbose=1,
+        cv=SearchCVConfig.get("cv", 5) if SearchCVConfig else 5,
+        n_jobs=SearchCVConfig.get("n_jobs", -1) if SearchCVConfig else -1,
+        verbose=SearchCVConfig.get("verbose", 1) if SearchCVConfig else 1,
     )
 
     return search
