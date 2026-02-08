@@ -1,7 +1,7 @@
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from churn.features.schema import CATEGORICAL_COLUMNS, NUMERIC_COLS, CATEGORICAL_COLS, NUMERICAL_COLUMNS
+from churn.features.schema import CATEGORICAL_COLUMNS, NUMERICAL_COLUMNS
 
 
 def build_preprocessor():

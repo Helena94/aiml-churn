@@ -1,12 +1,9 @@
-
-
-
-
-from xgboost import XGBClassifier
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
-
 from sklearn.pipeline import Pipeline
-from churn.features.preprocessing import build_preprocessor 
+
+from churn.features.preprocessing import build_preprocessor
+from xgboost import XGBClassifier
+
 
 def build_xgboost_model(param_distributions=None, SearchCVConfig=None, StratifiedKFoldConfig=None):
     """
@@ -38,10 +35,10 @@ def build_xgboost_model(param_distributions=None, SearchCVConfig=None, Stratifie
     search = RandomizedSearchCV(
         pipe,
         param_distributions=param_distributions,
-        n_iter= SearchCVConfig.get("n_iter", 25) if SearchCVConfig else 25,
+        n_iter=SearchCVConfig.get("n_iter", 25) if SearchCVConfig else 25,
         scoring=SearchCVConfig.get("scoring", "roc_auc") if SearchCVConfig else "roc_auc",
-        cv= SearchCVConfig.get("cv", cv) if SearchCVConfig else cv,
-        n_jobs= SearchCVConfig.get("n_jobs", -1) if SearchCVConfig else -1,
+        cv=SearchCVConfig.get("cv", cv) if SearchCVConfig else cv,
+        n_jobs=SearchCVConfig.get("n_jobs", -1) if SearchCVConfig else -1,
         random_state=42
     )
 

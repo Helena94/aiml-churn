@@ -1,5 +1,19 @@
 import pandas as pd
-from churn.features.schema import ID_COLUMNS, TARGET_COL, ID_COLS, TARGET_COLUMN
+from sklearn.model_selection import train_test_split
+
+from churn.features.schema import ID_COLUMNS, TARGET_COLUMN
+
+
+def split_train_test(df: pd.DataFrame, test_size=0.2, random_state=42):
+    """
+    Splits DataFrame into training and test sets, stratified by target.
+    Returns X_train, X_test, y_train, y_test.
+    """
+    X, y = split_features_target(df)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+    return X_train, X_test, y_train, y_test
 
 
 def split_features_target(df: pd.DataFrame):
