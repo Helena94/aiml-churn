@@ -1,0 +1,20 @@
+model_name: xgboost
+
+param_distributions:
+  model__n_estimators: [200, 500, 800]
+  model__max_depth: [3, 5, 7]
+  model__learning_rate: [0.01, 0.05, 0.1]
+  model__subsample: [0.7, 0.9, 1.0]
+  model__colsample_bytree: [0.7, 0.9, 1.0]
+
+SearchCVConfig:
+  scoring: roc_auc
+  n_iter: 25
+  n_jobs: -1
+  random_state: 42
+  verbose: 1
+
+StratifiedKFoldConfig:
+  n_splits: 5
+  shuffle: true
+  random_state: 42
