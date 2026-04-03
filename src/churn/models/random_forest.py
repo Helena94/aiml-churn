@@ -2,9 +2,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
 from sklearn.pipeline import Pipeline
 
-from churn.features.preprocessing import build_preprocessor
-
-
 def build_random_forest_model(param_distributions=None, SearchCVConfig=None, StratifiedKFoldConfig=None):
     """
     Returns a RandomizedSearchCV object
@@ -12,7 +9,6 @@ def build_random_forest_model(param_distributions=None, SearchCVConfig=None, Str
     """
     pipe = Pipeline(
         steps=[
-            ("preprocessing", build_preprocessor()),
             ("model", RandomForestClassifier(random_state=42)),
         ]
     )

@@ -2,9 +2,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.linear_model import LogisticRegression
 
-from churn.features.preprocessing import build_preprocessor
-
-
 def build_logistic_regression_model(param_grid=None, SearchCVConfig=None, StratifiedKFoldConfig=None):
     """
     Returns a GridSearchCV object
@@ -12,7 +9,6 @@ def build_logistic_regression_model(param_grid=None, SearchCVConfig=None, Strati
     """
     pipe = Pipeline(
         steps=[
-            ("preprocessing", build_preprocessor()),
             ("model", LogisticRegression(max_iter=500)),
         ]
     )

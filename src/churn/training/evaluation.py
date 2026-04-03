@@ -118,11 +118,9 @@ def evaluate_clustering_model(
     # Get the actual KMeans model from the pipeline
     if hasattr(best_model, "named_steps") and "model" in best_model.named_steps:
         kmeans = best_model.named_steps["model"]
-        preprocessor = best_model.named_steps["preprocessing"]
-        X_transformed = preprocessor.transform(X)
     else:
         kmeans = best_model
-        X_transformed = X
+    X_transformed = X
 
     n_clusters = len(set(labels))
 

@@ -3,10 +3,8 @@ from sklearn.metrics import silhouette_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 
-from churn.features.preprocessing import build_preprocessor
 
-
-def _silhouette_scorer(estimator, X):
+def _silhouette_scorer(estimator, X, y=None):
     """Custom scorer for KMeans using silhouette score."""
     labels = estimator.predict(X)
     if len(set(labels)) < 2:
@@ -21,7 +19,6 @@ def build_kmeans_model(params_grid=None, SearchCVConfig=None):
     """
     pipe = Pipeline(
         steps=[
-            ("preprocessing", build_preprocessor()),
             ("model", KMeans(init="k-means++", n_init=10, random_state=42)),
         ]
     )

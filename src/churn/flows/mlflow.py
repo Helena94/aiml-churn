@@ -1,23 +1,25 @@
+from pathlib import Path
+
 import mlflow
 import mlflow.sklearn
 import pandas as pd
 
-from churn.training.train import train_model
 from churn.training.evaluation import evaluate_model
+from churn.training.train import train_model
 
 
 def run_with_mlflow(
-    X_train: pd.DataFrame,
-    X_test: pd.DataFrame,
-    y_train: pd.Series,
-    y_test: pd.Series,
-    model_name: str,
-    config: dict,
+        X_train: pd.DataFrame,
+        X_test: pd.DataFrame,
+        y_train: pd.Series,
+        y_test: pd.Series,
+        model_name: str,
+        config: dict,
 ):
-    mlflow.set_tracking_uri("file:./mlruns")
-    mlflow.set_experiment("churn-training")
+    mlflow.set_tracking_uri("sqlite:///" + str(Path(__file__).resolve().parents[3] / "mlflow.db"))
+    experiment = mlflow.set_experiment("churn-training-{}".format(model_name))
 
-    with mlflow.start_run(run_name=model_name):
+    with mlflow.start_run(run_name=model_name, experiment_id=experiment.experiment_id):
         model = train_model(X_train, y_train, model_name=model_name, config=config)
 
         # Log best hyperparameters found by CV search
@@ -35,6 +37,6 @@ def run_with_mlflow(
         mlflow.log_metrics(scalar_metrics)
 
         # Log the trained model as an artifact
-        mlflow.sklearn.log_model(model, artifact_path="model")
+        mlflow.sklearn.log_model(model, name="model-{}".format(model_name))
 
     return model, metrics

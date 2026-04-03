@@ -2,20 +2,16 @@ model_name: logistic_regression
 
 # List of param grids — GridSearchCV will search over each dict
 param_grid:
+  # lbfgs only supports L2; use C to control regularization strength
   - model__C: [0.01, 0.1, 1.0, 10.0]
-    model__penalty: [null, "l2"]
     model__solver: ["lbfgs"]
     model__class_weight: [null, "balanced"]
 
-  - model__C: [0.01, 0.1, 1.0, 10.0]
-    model__penalty: ["l1"]
-    model__solver: ["saga"]
-    model__class_weight: [null, "balanced"]
-
+  # saga + elasticnet: l1_ratio controls mix (0=L2, 1=L1, in-between=elasticnet)
   - model__C: [0.01, 0.1, 1.0, 10.0]
     model__penalty: ["elasticnet"]
+    model__l1_ratio: [0.0, 0.25, 0.5, 0.75, 1.0]
     model__solver: ["saga"]
-    model__l1_ratio: [0.25, 0.5, 0.75]
     model__class_weight: [null, "balanced"]
 
 SearchCVConfig:
