@@ -120,7 +120,6 @@ def evaluate_clustering_model(
         kmeans = best_model.named_steps["model"]
     else:
         kmeans = best_model
-    X_transformed = X
 
     n_clusters = len(set(labels))
 
@@ -134,7 +133,7 @@ def evaluate_clustering_model(
 
     # Calculate silhouette score (requires at least 2 clusters)
     if n_clusters >= 2:
-        metrics["silhouette_score"] = silhouette_score(X_transformed, labels)
+        metrics["silhouette_score"] = silhouette_score(X, labels)
 
     # Log metrics
     logger.info("Clustering Evaluation Results:")

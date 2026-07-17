@@ -1,43 +1,74 @@
-# Telco Churn Analysis Project
+# Telco Customer Churn Prediction
 
-## Project Structure
-```
-src/
-├── data/           # Data loading and preprocessing
-├── features/       # Feature engineering
-├── models/         # Model training and prediction
-├── evaluation/     # Model evaluation and metrics
-└── utils/          # Utility functions
-```
+End-to-end ML pipeline for predicting customer churn on the Kaggle
+[`blastchar/telco-customer-churn`](https://www.kaggle.com/datasets/blastchar/telco-customer-churn)
+dataset. Covers ETL (Prefect-orchestrated), feature engineering, model training with
+hyperparameter search, and experiment tracking (MLflow).
 
-## Setup Instructions
+## Setup
 
-### 1. Activate Virtual Environment
+Dependencies are managed with [uv](https://docs.astral.sh/uv/).
+
 ```bash
-source telco-churn/bin/activate  # macOS/Linux
-# or
-telco-churn\Scripts\activate     # Windows
+uv sync                # install runtime deps
+uv sync --group dev    # + pytest, jupyter, ipykernel
 ```
 
-### 2. Install Dependencies
+Kaggle credentials are required for the ETL download step. Put them in
+`kaggle/kaggle.json` (loaded into env vars at runtime).
+
+## Pipeline
+
+### 1. ETL (Prefect)
+
+Extract → transform → load. Downloads the raw dataset, cleans/validates it, and writes
+`data/processed/churn_cleaned.csv`.
+
 ```bash
-pip install -r requirements.txt
+python scripts/run_etl.py
 ```
 
-### 3. VS Code Extensions
-**Mandatory:**
-- Python (Microsoft)
-- Jupyter
-- Pylance
+### 2. Train & track experiments (Prefect + MLflow)
 
-**Recommended:**
-- YAML
-- Black Formatter
-- isort
-- GitLens
-- Python Environment Manager
+Trains all four models (logistic regression, random forest, XGBoost, kmeans) in parallel,
+logging params, metrics, and the fitted model to MLflow.
 
-## Usage
-1. Activate the virtual environment
-2. Place your data in the `src/data/` directory
-3. Start developing your analysis!
+```bash
+python scripts/run_experiments.py
+```
+
+Each model's hyperparameter grid lives in `configs/<model>.yml`.
+
+### 3. Inspect runs (MLflow UI)
+
+Runs are tracked in a local SQLite store (`mlflow.db`).
+
+```bash
+mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+
+## Tests
+
+Covers the ETL functions (extract, transform, load). Prefect-decorated functions are
+tested via `.fn()` to bypass the Prefect runtime.
+
+```bash
+pytest                           # all tests
+pytest tests/test_transform.py   # one file
+```
+
+## Layout
+
+```
+src/churn/
+├── etl/          # Prefect tasks/flows: download, extract, transform, load
+├── features/     # schema.py (column defs), preprocessing.py (ColumnTransformer), builder.py (split/encode)
+├── models/       # one builder per model → Pipeline(preprocessing → model) wrapped in a CV search
+├── training/     # train.py (dispatch), evaluation.py (metrics), predict.py
+└── flows/        # mlflow.py — train + log a single model run
+
+scripts/          # run_etl.py, run_experiments.py
+configs/          # per-model hyperparameter grids
+```
+
+The column schema is defined once in `features/schema.py`; add/remove columns there.
