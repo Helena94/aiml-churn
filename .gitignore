@@ -69,3 +69,7 @@ kaggle.json
 *.pkl
 *.h5
 *.joblib
+
+# MLflow / Prefect artifacts
+mlruns/
+mlartifacts/
