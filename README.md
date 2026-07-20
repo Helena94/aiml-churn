@@ -45,6 +45,16 @@ Runs are tracked in a local SQLite store (`mlflow.db`).
 
 ```bash
 mlflow ui --backend-store-uri sqlite:///mlflow.db
+uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+
+### 4. Run prefect ui
+
+```bash
+uv run prefect server start
+uv run prefect config set PREFECT_API_URL=http://127.0.0.1:4200/api
+uv run prefect work-pool create local-process --type process --set-as-default
+uv run prefect worker start --pool local-process
 ```
 
 ## Tests
