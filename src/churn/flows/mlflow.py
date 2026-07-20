@@ -16,7 +16,7 @@ def run_with_mlflow(
         model_name: str,
         config: dict,
 ):
-    mlflow.set_tracking_uri("sqlite:///" + str(Path(__file__).resolve().parents[3] / "mlflow.db"))
+    mlflow.set_tracking_uri("sqlite:///" + str(Path(__file__).resolve().parents[3] / "mlflow.db") + "?timeout=30")
     experiment = mlflow.set_experiment("churn-training")
 
     with mlflow.start_run(run_name=model_name, experiment_id=experiment.experiment_id):
