@@ -1,0 +1,19 @@
+input_path: data/processed/batch_customers.parquet   # .csv is also accepted
+output_dir: data/predictions
+tracking_uri: null            # null -> the project-local sqlite mlflow.db
+
+# The primary model owns churn_prediction / churn_probability / risk_group.
+primary_model_uri: models:/telco-churn-model@champion
+
+# Scored side by side, one churn_probability_<name> column each.
+comparison_models:
+  logistic_regression: models:/telco-churn-logistic-regression@champion
+  random_forest: models:/telco-churn-random-forest@champion
+  xgboost: models:/telco-churn-xgboost@champion
+
+# Clustering model -> `segment` column. Set to null to skip.
+segmentation_model_uri: models:/telco-churn-segmentation@champion
+
+decision_threshold: 0.5       # probability at or above which a customer is a churner
+risk_low: 0.40                # below -> Low, at/above -> Medium
+risk_high: 0.70               # at/above -> High

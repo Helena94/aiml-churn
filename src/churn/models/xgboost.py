@@ -2,12 +2,15 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
 from sklearn.pipeline import Pipeline
 
+from churn.features.preprocessing import build_preprocessor
+
 def build_xgboost_model(param_distributions=None, SearchCVConfig=None, StratifiedKFoldConfig=None):
     """
     Returns a RandomizedSearchCV object for HistGradientBoostingClassifier.
     Drop-in replacement for XGBoost — no OpenMP dependency required.
     """
     pipe = Pipeline(steps=[
+        ("preprocessor", build_preprocessor()),
         ("model", HistGradientBoostingClassifier(random_state=42)),
     ])
 

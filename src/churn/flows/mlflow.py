@@ -3,9 +3,39 @@ from pathlib import Path
 import mlflow
 import mlflow.sklearn
 import pandas as pd
+from mlflow.tracking import MlflowClient
 
 from churn.training.evaluation import evaluate_model
 from churn.training.train import train_model
+
+
+def mlflow_tracking_uri() -> str:
+    """Tracking/registry URI for the project-local SQLite store."""
+    return "sqlite:///" + str(Path(__file__).resolve().parents[3] / "mlflow.db") + "?timeout=30"
+
+
+def register_champion(
+        run_id: str,
+        artifact_name: str,
+        registry_name: str,
+        alias: str = "champion",
+) -> int:
+    """
+    Register a logged model under `registry_name` and point `alias` at the new version.
+
+    Args:
+        run_id: MLflow run that logged the model.
+        artifact_name: Model name used at log time (the `model-<name>` artifact path).
+        registry_name: Registered model name to create/extend.
+        alias: Alias to move onto the new version.
+
+    Returns:
+        The registered model version number.
+    """
+    mlflow.set_tracking_uri(mlflow_tracking_uri())
+    version = mlflow.register_model(f"runs:/{run_id}/model-{artifact_name}", registry_name)
+    MlflowClient().set_registered_model_alias(registry_name, alias, version.version)
+    return int(version.version)
 
 
 def run_with_mlflow(
@@ -16,10 +46,11 @@ def run_with_mlflow(
         model_name: str,
         config: dict,
 ):
-    mlflow.set_tracking_uri("sqlite:///" + str(Path(__file__).resolve().parents[3] / "mlflow.db") + "?timeout=30")
+    mlflow.set_tracking_uri(mlflow_tracking_uri())
     experiment = mlflow.set_experiment("churn-training")
 
-    with mlflow.start_run(run_name=model_name, experiment_id=experiment.experiment_id):
+    with mlflow.start_run(run_name=model_name, experiment_id=experiment.experiment_id) as run:
+        run_id = run.info.run_id
         model = train_model(X_train, y_train, model_name=model_name, config=config)
 
         # Log the full config for provenance/reproducibility (dict -> artifact)
@@ -59,4 +90,4 @@ def run_with_mlflow(
         # Log the trained model as an artifact
         mlflow.sklearn.log_model(model, name="model-{}".format(model_name))
 
-    return model, metrics
+    return model, metrics, run_id

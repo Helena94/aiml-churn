@@ -118,6 +118,9 @@ def evaluate_clustering_model(
     # Get the actual KMeans model from the pipeline
     if hasattr(best_model, "named_steps") and "model" in best_model.named_steps:
         kmeans = best_model.named_steps["model"]
+        # Silhouette must be measured in the space the model actually clusters
+        # in: the pipeline takes raw frames, so run them through preprocessing.
+        X = best_model[:-1].transform(X)
     else:
         kmeans = best_model
 
