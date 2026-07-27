@@ -15,12 +15,10 @@ The stages are strictly sequential — each one consumes the previous one's outp
 | 0 | Kaggle credentials | put `kaggle.json` in `kaggle/` | — |
 | 1 | ETL | `python scripts/run_etl.py` | `data/processed/churn_cleaned.csv` |
 | 2 | Train + register | `python scripts/run_experiments.py` | MLflow runs + registered models in `mlflow.db` |
-| 3 | Batch input | see [Batch input](#3-batch-input) | `data/processed/batch_customers.parquet` |
-| 4 | Batch scoring | `python scripts/run_batch_prediction.py` | `data/predictions/*.parquet` |
+| 3 | Batch scoring | `python scripts/run_batch_prediction.py` | `data/predictions/*.parquet` |
 
 Skipping a step fails the next one: without step 1 training has no data, without step 2
-the `models:/...@champion` URIs don't resolve, without step 3 the batch flow raises
-`FileNotFoundError`.
+the `models:/...@champion` URIs don't resolve.
 
 ## Setup
 
@@ -78,25 +76,23 @@ The best classifier by `roc_auc` is additionally registered as `telco-churn-mode
 aliased `@champion` — that's the primary model the batch flow scores with. kmeans never
 competes for primary (it has no `roc_auc`).
 
-### 3. Batch input
+### Batch input
 
 The batch flow reads `data/processed/batch_customers.parquet` (path set in
-`configs/batch_prediction.yml`; `.csv` is also accepted). **Nothing in the repo generates
-this file** — it stands in for whatever customer extract you want scored.
+`configs/batch_prediction.yml`; `.csv` is also accepted). It stands in for whatever customer
+extract you want scored.
 
-To score the cleaned dataset itself:
-
-```bash
-python -c "import pandas as pd; \
-pd.read_csv('data/processed/churn_cleaned.csv').drop(columns=['churn']) \
-  .to_parquet('data/processed/batch_customers.parquet', index=False)"
-```
+When that file is missing, the flow's first task builds it from `fallback_source` and writes
+**only the held-out test split** — the same 20% `run_experiments.py` kept out of training, so
+the batch scores customers the models have never seen. An existing file is never overwritten,
+so dropping in a real extract takes precedence. Point a real pipeline at `input_path` and set
+`fallback_source: null` to turn the stand-in off; a missing input then fails the run.
 
 The file must carry `customer_id` plus every column in `CATEGORICAL_COLUMNS` and
 `NUMERICAL_COLUMNS` from `features/schema.py`, with no duplicate IDs — `validate_batch_data`
 rejects it otherwise. The `churn` column is not required and is ignored if present.
 
-### 4. Batch prediction (Prefect + MLflow)
+### 3. Batch prediction (Prefect + MLflow)
 
 Loads the registered models and scores the batch. Never retrains.
 

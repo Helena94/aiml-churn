@@ -7,12 +7,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from churn.features.builder import split_train_test
 from churn.prediction.batch import (
     FEATURE_COLUMNS,
     assign_risk_group,
     generate_predictions,
     load_batch_data,
     log_batch_summary,
+    prepare_batch_input,
     save_predictions,
     validate_batch_data,
 )
@@ -47,6 +49,47 @@ class StubSegmenter:
 
     def predict(self, X):
         return self._labels
+
+
+class TestPrepareBatchInput:
+    """Tests for prepare_batch_input task."""
+
+    def _source(self, tmp_path, n=100):
+        """Cleaned-CSV stand-in: features plus the identifier and target columns."""
+        df = _batch_df(n)
+        df["churn"] = ["Yes" if i % 4 == 0 else "No" for i in range(n)]
+        path = tmp_path / "cleaned.csv"
+        df.to_csv(path, index=False)
+        return path
+
+    def test_writes_only_the_holdout_rows(self, tmp_path):
+        source = self._source(tmp_path, n=100)
+        out = tmp_path / "batch.parquet"
+
+        assert prepare_batch_input.fn(out, source) is True
+
+        written = pd.read_parquet(out)
+        assert len(written) == 20  # 20% test split
+        assert "churn" not in written.columns
+        assert "customer_id" in written.columns
+
+    def test_rows_match_the_training_holdout(self, tmp_path):
+        """The batch must be the same rows run_experiments.py held out."""
+        source = self._source(tmp_path, n=100)
+        out = tmp_path / "batch.parquet"
+        prepare_batch_input.fn(out, source)
+
+        df = pd.read_csv(source)
+        expected = set(df.loc[split_train_test(df)[1].index, "customer_id"])
+        assert set(pd.read_parquet(out)["customer_id"]) == expected
+
+    def test_existing_file_is_not_overwritten(self, tmp_path):
+        source = self._source(tmp_path)
+        out = tmp_path / "batch.parquet"
+        _batch_df(3).to_parquet(out, index=False)
+
+        assert prepare_batch_input.fn(out, source) is False
+        assert len(pd.read_parquet(out)) == 3
 
 
 class TestLoadBatchData:

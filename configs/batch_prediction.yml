@@ -1,5 +1,10 @@
 input_path: data/processed/batch_customers.parquet   # .csv is also accepted
 output_dir: data/predictions
+
+# Stand-in for an upstream customer extract: when input_path is missing, it is built
+# from this CSV (minus the target column). An existing input_path is never overwritten.
+# Set to null once a real extract lands at input_path.
+fallback_source: data/processed/churn_cleaned.csv
 tracking_uri: null            # null -> the project-local sqlite mlflow.db
 
 # The primary model owns churn_prediction / churn_probability / risk_group.

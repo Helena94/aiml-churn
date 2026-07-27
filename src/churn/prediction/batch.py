@@ -18,8 +18,13 @@ import pandas as pd
 from mlflow.tracking import MlflowClient
 from prefect import task
 
-from churn.features.builder import build_features
-from churn.features.schema import CATEGORICAL_COLUMNS, ID_COLUMNS, NUMERICAL_COLUMNS
+from churn.features.builder import build_features, split_train_test
+from churn.features.schema import (
+    CATEGORICAL_COLUMNS,
+    ID_COLUMNS,
+    NUMERICAL_COLUMNS,
+    TARGET_COLUMN,
+)
 from churn.flows.mlflow import mlflow_tracking_uri
 from churn.training.predict import predict
 
@@ -28,6 +33,40 @@ logger = logging.getLogger(__name__)
 CUSTOMER_ID = ID_COLUMNS[0]
 FEATURE_COLUMNS = CATEGORICAL_COLUMNS + NUMERICAL_COLUMNS
 RISK_GROUPS = ("Low", "Medium", "High")
+
+
+@task
+def prepare_batch_input(input_path: str | Path, source_path: str | Path) -> bool:
+    """
+    Build the batch input from the held-out test rows when no external extract has landed.
+
+    Stands in for an upstream customer extract. Only the test split is written, so the
+    batch scores customers no model was fitted on. Existing files are left alone, so a
+    real extract always wins. Set `fallback_source: null` in the config to disable this.
+
+    Args:
+        input_path: Where the batch flow expects its input.
+        source_path: Cleaned CSV to derive the batch from (the ETL output).
+
+    Returns:
+        True if a file was written, False if the input already existed.
+    """
+    path = Path(input_path)
+    if path.exists():
+        logger.info(f"Batch input already present at {path}, leaving it untouched")
+        return False
+
+    df = pd.read_csv(source_path)
+    # ponytail: re-runs the same deterministic split as run_experiments.py instead of
+    # persisting the holdout at training time — both call split_train_test() with its
+    # defaults, so the rows match. Persist X_test from training if the params diverge.
+    test_index = split_train_test(df)[1].index
+    batch = df.loc[test_index].drop(columns=TARGET_COLUMN)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    batch.to_parquet(path, index=False)
+    logger.info(f"Built batch input at {path} ({len(batch)} held-out rows) from {source_path}")
+    return True
 
 
 @task

@@ -14,6 +14,7 @@ from churn.prediction.batch import (
     load_batch_data,
     load_mlflow_model,
     log_batch_summary,
+    prepare_batch_input,
     resolve_model_version,
     save_predictions,
     validate_batch_data,
@@ -52,7 +53,11 @@ def batch_prediction(config_path: str | Path = DEFAULT_CONFIG, **overrides: Any)
     batch_id = datetime.now().strftime("%Y%m%dT%H%M%S")
     logger.info(f"Starting batch prediction {batch_id}")
 
-    df = load_batch_data(_resolve(cfg["input_path"]))
+    input_path = _resolve(cfg["input_path"])
+    if cfg.get("fallback_source"):
+        prepare_batch_input(input_path, _resolve(cfg["fallback_source"]))
+
+    df = load_batch_data(input_path)
     validate_batch_data(df)
 
     tracking_uri = cfg.get("tracking_uri")
