@@ -14,7 +14,9 @@ from churn.prediction.batch import (
     generate_predictions,
     load_batch_data,
     log_batch_summary,
+    model_comparison,
     prepare_batch_input,
+    save_comparison,
     save_predictions,
     validate_batch_data,
 )
@@ -254,3 +256,107 @@ class TestSaveAndSummary:
 
         assert summary["avg_churn_probability_per_model"]["random_forest"] == pytest.approx(0.525)
         assert summary["segments"] == {"0": 2, "1": 2}
+
+
+class TestModelComparison:
+    """Tests for the model_comparison and save_comparison tasks."""
+
+    def _scored(self):
+        """Three classifiers over four customers, with hand-checkable votes.
+
+        At threshold 0.5 the rows are: all-agree-no-churn, all-agree-churn, then
+        two splits. random_forest is the deliberate outlier on both splits.
+        """
+        return pd.DataFrame(
+            {
+                "customer_id": ["a", "b", "c", "d"],
+                "churn_probability_logistic_regression": [0.10, 0.60, 0.10, 0.90],
+                "churn_probability_random_forest": [0.20, 0.70, 0.60, 0.40],
+                "churn_probability_xgboost": [0.30, 0.80, 0.20, 0.95],
+                # The primary's duplicate column must not be counted as a model.
+                "churn_probability": [0.30, 0.80, 0.20, 0.95],
+                "segment": [0, 1, 1, 0],
+            }
+        )
+
+    def _row(self, comparison, model):
+        return comparison.set_index("model").loc[model]
+
+    def test_one_row_per_classifier(self):
+        comparison = model_comparison.fn(self._scored())
+
+        # `churn_probability` lacks the trailing underscore, so it is excluded.
+        assert list(comparison["model"]) == [
+            "logistic_regression",
+            "random_forest",
+            "xgboost",
+        ]
+
+    def test_per_model_distribution(self):
+        row = self._row(model_comparison.fn(self._scored()), "logistic_regression")
+
+        assert row["mean_churn_probability"] == pytest.approx(0.425)
+        assert row["median_churn_probability"] == pytest.approx(0.35)
+        assert row["n_predicted_churn"] == 2
+        assert row["churn_rate"] == pytest.approx(0.5)
+
+    def test_per_model_risk_split(self):
+        comparison = model_comparison.fn(self._scored())
+        rf = self._row(comparison, "random_forest")
+
+        # 0.20 -> Low, 0.70 -> High, 0.60 -> Medium, 0.40 -> Medium
+        assert (rf["risk_low"], rf["risk_medium"], rf["risk_high"]) == (1, 2, 1)
+
+    def test_agreement_with_consensus_flags_the_outlier(self):
+        comparison = model_comparison.fn(self._scored())
+
+        # Majority vote is no/yes/no/yes; rf disagrees on both split rows.
+        assert self._row(comparison, "logistic_regression")["agreement_with_consensus"] == 1.0
+        assert self._row(comparison, "xgboost")["agreement_with_consensus"] == 1.0
+        assert self._row(comparison, "random_forest")["agreement_with_consensus"] == pytest.approx(
+            0.5
+        )
+
+    def test_batch_agreement_stats_repeat_on_every_row(self):
+        comparison = model_comparison.fn(self._scored())
+
+        assert list(comparison["batch_all_agree_churn"]) == [1, 1, 1]
+        assert list(comparison["batch_all_agree_no_churn"]) == [1, 1, 1]
+        assert list(comparison["batch_disagree"]) == [2, 2, 2]
+        assert comparison["batch_agreement_rate"].iloc[0] == pytest.approx(0.5)
+        assert comparison["batch_n_customers"].iloc[0] == 4
+        # Spreads 0.20, 0.20, 0.50, 0.55
+        assert comparison["batch_mean_probability_spread"].iloc[0] == pytest.approx(0.3625)
+
+    def test_decision_threshold_is_honoured(self):
+        comparison = model_comparison.fn(self._scored(), decision_threshold=0.95)
+
+        assert self._row(comparison, "xgboost")["n_predicted_churn"] == 1
+        assert self._row(comparison, "logistic_regression")["n_predicted_churn"] == 0
+
+    def test_lineage_columns(self):
+        comparison = model_comparison.fn(
+            self._scored(), model_uris={"random_forest": "runs:/abc/model"}
+        )
+        rf = self._row(comparison, "random_forest")
+
+        assert rf["model_uri"] == "runs:/abc/model"
+        # Not a `models:/name@alias` URI, so no registry lookup is attempted.
+        assert rf["model_version"] is None
+        assert self._row(comparison, "xgboost")["model_uri"] is None
+
+    def test_no_classifier_columns_raises(self):
+        with pytest.raises(ValueError, match="No 'churn_probability_"):
+            model_comparison.fn(pd.DataFrame({"customer_id": ["a"], "segment": [0]}))
+
+    def test_save_writes_historical_and_latest(self, tmp_path):
+        comparison = model_comparison.fn(self._scored())
+        historical = save_comparison.fn(comparison, tmp_path, "20260721T120000")
+
+        assert historical == tmp_path / "model_comparison_20260721T120000.csv"
+        assert (tmp_path / "latest_model_comparison.csv").exists()
+
+        saved = pd.read_csv(tmp_path / "latest_model_comparison.csv")
+        assert len(saved) == 3
+        assert list(saved["batch_id"]) == ["20260721T120000"] * 3
+        assert "comparison_timestamp" in saved.columns

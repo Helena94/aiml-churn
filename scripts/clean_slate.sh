@@ -26,10 +26,11 @@ sleep 2
 echo "==> Deleting MLflow tracking DBs and artifact stores"
 rm -rf ./mlflow.db ./src/mlflow.db ./mlruns ./scripts/mlruns ./mlartifacts
 
-echo "==> Deleting batch prediction outputs"
+echo "==> Deleting batch prediction outputs and comparison reports"
 # Derived from the registry we just wiped — every model_uri/model_version stamp
 # in them now points at a version that no longer exists. Inputs are kept.
 rm -f ./data/predictions/churn_predictions_*.parquet ./data/predictions/latest_predictions.parquet
+rm -f ./data/predictions/model_comparison_*.csv ./data/predictions/latest_model_comparison.csv
 
 echo "==> Resetting Prefect database"
 # `prefect server database reset` can fail on a broken alembic downgrade, so

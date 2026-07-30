@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 CUSTOMER_ID = ID_COLUMNS[0]
 FEATURE_COLUMNS = CATEGORICAL_COLUMNS + NUMERICAL_COLUMNS
 RISK_GROUPS = ("Low", "Medium", "High")
+PROBABILITY_PREFIX = "churn_probability_"
 
 
 @task
@@ -320,6 +321,148 @@ def save_predictions(
     return historical
 
 
+def _probability_columns(predictions: pd.DataFrame) -> list[str]:
+    """Per-classifier probability columns, in output order."""
+    return [c for c in predictions.columns if c.startswith(PROBABILITY_PREFIX)]
+
+
+@task
+def model_comparison(
+    predictions: pd.DataFrame,
+    model_uris: dict[str, str] | None = None,
+    decision_threshold: float = 0.5,
+    risk_low: float = 0.40,
+    risk_high: float = 0.70,
+) -> pd.DataFrame:
+    """
+    Build the multi-model comparison table from an already-scored batch.
+
+    One row per classifier: its own probability distribution, churn count, risk
+    split, registry lineage, and how often it agrees with the majority vote.
+    Batch-level agreement statistics are repeated on every row as `batch_*`
+    columns — constant across a 3-row table, which keeps the report to one file.
+
+    Derives everything from the prediction columns, so no model is reloaded and
+    nothing is re-scored.
+
+    Args:
+        predictions: Output of `generate_predictions` (before or after metadata).
+        model_uris: Optional model name -> registry URI, for lineage columns.
+        decision_threshold: Probability at or above which a model votes churn.
+        risk_low: Lower risk boundary.
+        risk_high: Upper risk boundary.
+
+    Returns:
+        Comparison DataFrame, one row per classifier.
+
+    Raises:
+        ValueError: If the frame carries no per-classifier probability columns.
+    """
+    columns = _probability_columns(predictions)
+    if not columns:
+        raise ValueError(
+            f"No '{PROBABILITY_PREFIX}*' columns to compare; "
+            "score the batch with at least one named classifier first"
+        )
+
+    uris = model_uris or {}
+    probabilities = predictions[columns]
+    votes = probabilities >= decision_threshold
+    churn_votes = votes.sum(axis=1)
+    n_models, n_rows = len(columns), len(predictions)
+
+    # Majority vote. With an even number of models a tie counts as non-churn.
+    consensus = churn_votes * 2 > n_models
+    all_churn = int((churn_votes == n_models).sum())
+    all_no_churn = int((churn_votes == 0).sum())
+    batch_stats = {
+        "batch_n_customers": n_rows,
+        "batch_all_agree_churn": all_churn,
+        "batch_all_agree_no_churn": all_no_churn,
+        "batch_disagree": n_rows - all_churn - all_no_churn,
+        "batch_agreement_rate": (all_churn + all_no_churn) / n_rows if n_rows else 0.0,
+        "batch_mean_probability_spread": float(
+            (probabilities.max(axis=1) - probabilities.min(axis=1)).mean()
+        ),
+    }
+
+    rows = []
+    for column in columns:
+        name = column.removeprefix(PROBABILITY_PREFIX)
+        probability = probabilities[column]
+        groups = pd.Series(assign_risk_group(probability.to_numpy(), risk_low, risk_high))
+        counts = groups.value_counts()
+        rows.append(
+            {
+                "model": name,
+                "model_uri": uris.get(name),
+                "model_version": resolve_model_version(uris[name]) if name in uris else None,
+                "mean_churn_probability": float(probability.mean()),
+                "median_churn_probability": float(probability.median()),
+                "n_predicted_churn": int(votes[column].sum()),
+                "churn_rate": float(votes[column].mean()),
+                **{f"risk_{group.lower()}": int(counts.get(group, 0)) for group in RISK_GROUPS},
+                # Folds pairwise agreement into one number: how much of an
+                # outlier this model is against the majority.
+                "agreement_with_consensus": float((votes[column] == consensus).mean()),
+                **batch_stats,
+            }
+        )
+
+    comparison = pd.DataFrame(rows)
+    logger.info(f"Compared {n_models} classifier(s) over {n_rows} customers:")
+    for row in rows:
+        logger.info(
+            f"  {row['model']:<22} mean={row['mean_churn_probability']:.3f} "
+            f"churn={row['n_predicted_churn']:<5} "
+            f"L/M/H={row['risk_low']}/{row['risk_medium']}/{row['risk_high']} "
+            f"consensus={row['agreement_with_consensus']:.3f}"
+        )
+    logger.info(
+        f"  Agreement: {all_churn} all-churn, {all_no_churn} all-no-churn, "
+        f"{batch_stats['batch_disagree']} split "
+        f"(rate {batch_stats['batch_agreement_rate']:.3f}, "
+        f"mean spread {batch_stats['batch_mean_probability_spread']:.3f})"
+    )
+    return comparison
+
+
+@task
+def save_comparison(
+    comparison: pd.DataFrame,
+    output_dir: str | Path,
+    batch_id: str,
+) -> Path:
+    """
+    Write the timestamped comparison report and the latest-comparison file.
+
+    Mirrors `save_predictions`: one historical file per batch plus a fixed-name
+    file for a future dashboard to read.
+
+    Args:
+        comparison: Comparison table from `model_comparison`.
+        output_dir: Directory to write into (created if absent).
+        batch_id: Identifier used in the historical filename.
+
+    Returns:
+        Path of the historical file.
+    """
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    comparison = comparison.copy()
+    comparison.insert(0, "batch_id", batch_id)
+    comparison["comparison_timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    historical = out_dir / f"model_comparison_{batch_id}.csv"
+    latest = out_dir / "latest_model_comparison.csv"
+    comparison.to_csv(historical, index=False)
+    comparison.to_csv(latest, index=False)
+
+    logger.info(f"Saved model comparison to {historical} and {latest}")
+    return historical
+
+
 @task
 def log_batch_summary(predictions: pd.DataFrame, output_path: str | Path) -> dict:
     """
@@ -343,9 +486,8 @@ def log_batch_summary(predictions: pd.DataFrame, output_path: str | Path) -> dic
 
     # Side-by-side models are the point of this batch, so surface their spread too.
     per_model = {
-        col.removeprefix("churn_probability_"): float(predictions[col].mean())
-        for col in predictions.columns
-        if col.startswith("churn_probability_")
+        col.removeprefix(PROBABILITY_PREFIX): float(predictions[col].mean())
+        for col in _probability_columns(predictions)
     }
     if per_model:
         summary["avg_churn_probability_per_model"] = per_model

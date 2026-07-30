@@ -14,8 +14,10 @@ from churn.prediction.batch import (
     load_batch_data,
     load_mlflow_model,
     log_batch_summary,
+    model_comparison,
     prepare_batch_input,
     resolve_model_version,
+    save_comparison,
     save_predictions,
     validate_batch_data,
 )
@@ -36,7 +38,8 @@ def _resolve(path: str | Path) -> Path:
 @flow(name="telco-churn-batch-prediction")
 def batch_prediction(config_path: str | Path = DEFAULT_CONFIG, **overrides: Any) -> dict:
     """
-    Score a batch of customers with the registered MLflow models.
+    Score a batch of customers with the registered MLflow models, then save the
+    multi-model comparison report alongside the predictions.
 
     Args:
         config_path: Path to the batch prediction YAML config.
@@ -94,8 +97,21 @@ def batch_prediction(config_path: str | Path = DEFAULT_CONFIG, **overrides: Any)
         batch_id=batch_id,
         model_version=resolve_model_version(primary_uri),
     )
-    output_path = save_predictions(predictions, _resolve(cfg["output_dir"]), batch_id)
-    return log_batch_summary(predictions, output_path)
+    output_dir = _resolve(cfg["output_dir"])
+    output_path = save_predictions(predictions, output_dir, batch_id)
+
+    comparison = model_comparison(
+        predictions,
+        model_uris=dict(cfg.get("comparison_models") or {}),
+        decision_threshold=cfg["decision_threshold"],
+        risk_low=cfg["risk_low"],
+        risk_high=cfg["risk_high"],
+    )
+    comparison_path = save_comparison(comparison, output_dir, batch_id)
+
+    summary = log_batch_summary(predictions, output_path)
+    summary["comparison_path"] = str(comparison_path)
+    return summary
 
 
 if __name__ == "__main__":

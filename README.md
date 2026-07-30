@@ -15,10 +15,32 @@ The stages are strictly sequential — each one consumes the previous one's outp
 | 0 | Kaggle credentials | put `kaggle.json` in `kaggle/` | — |
 | 1 | ETL | `python scripts/run_etl.py` | `data/processed/churn_cleaned.csv` |
 | 2 | Train + register | `python scripts/run_experiments.py` | MLflow runs + registered models in `mlflow.db` |
-| 3 | Batch scoring | `python scripts/run_batch_prediction.py` | `data/predictions/*.parquet` |
+| 3 | Batch scoring + comparison | `python scripts/run_batch_prediction.py` | `data/predictions/*.parquet` + `model_comparison_*.csv` |
 
 Skipping a step fails the next one: without step 1 training has no data, without step 2
 the `models:/...@champion` URIs don't resolve.
+
+### Weekly schedule
+
+`scripts/run_weekly.py` is a parent flow that runs steps 1–3 in order as nested subflows.
+The calls are sequential, so a failed stage stops everything downstream.
+
+```bash
+uv run prefect server start        # separate terminal — needed for the schedule to fire
+uv run python scripts/run_weekly.py
+```
+
+That serves a `weekly-churn-analysis` deployment on cron `0 9 * * 1`
+(Mondays 09:00 `Europe/Belgrade`) with `limit=1`, so runs can't overlap. No work pool or
+worker is needed — `serve()` runs its own runner. Trigger it immediately instead of waiting
+for Monday:
+
+```bash
+uv run prefect deployment run 'weekly-churn-analysis/weekly-churn-analysis'
+```
+
+Because the Kaggle dataset is static, the schedule demonstrates Prefect orchestration — it
+is not evidence that weekly retraining improves the models.
 
 ## Setup
 
@@ -111,6 +133,27 @@ from the primary model `churn_probability`, `churn_prediction`, `churn_label`,
 A missing optional model is logged and skipped; a missing primary is a hard error.
 Thresholds, model URIs, and paths all live in `configs/batch_prediction.yml`.
 
+### 4. Model comparison report
+
+Runs automatically at the end of the batch flow — no separate command. Derived entirely from
+the prediction columns, so no model is reloaded and nothing is re-scored.
+
+Writes `data/predictions/model_comparison_<batch_id>.csv` and
+`latest_model_comparison.csv`: one row per classifier with its probability distribution
+(`mean_churn_probability`, `median_churn_probability`), `n_predicted_churn`, `churn_rate`,
+risk split (`risk_low` / `risk_medium` / `risk_high`), registry lineage (`model_uri`,
+`model_version`), and `agreement_with_consensus` — how often that model matches the majority
+vote, which is what flags an outlier model.
+
+Batch-level agreement statistics are repeated on every row as `batch_*` columns
+(`batch_all_agree_churn`, `batch_all_agree_no_churn`, `batch_disagree`,
+`batch_agreement_rate`, `batch_mean_probability_spread`). Constant across a three-row table,
+which keeps the whole report in one file.
+
+The report needs at least one `churn_probability_<name>` column and raises otherwise. The
+primary model's own `churn_probability` column is excluded — it's a duplicate of whichever
+classifier is champion.
+
 ## UIs
 
 ### MLflow
@@ -156,7 +199,7 @@ What it does, in order:
 |------|--------|
 | 1 | Kills any running `prefect server`, `prefect worker`, `mlflow`, `huey_consumer` process (failures ignored — nothing running is fine) |
 | 2 | Deletes the MLflow tracking DBs and artifact stores: `mlflow.db`, `src/mlflow.db`, `mlruns/`, `scripts/mlruns/`, `mlartifacts/` |
-| 3 | Deletes batch outputs: `data/predictions/churn_predictions_*.parquet` and `latest_predictions.parquet` |
+| 3 | Deletes batch outputs: `data/predictions/churn_predictions_*.parquet`, `latest_predictions.parquet`, `model_comparison_*.csv`, `latest_model_comparison.csv` |
 | 4 | Deletes `~/.prefect/prefect.db*` and `~/.prefect/storage/*`, then rebuilds an empty schema with `prefect server database upgrade` |
 
 **Kept:** all source code, `data/raw/`, `data/processed/` (including `churn_cleaned.csv`
@@ -165,9 +208,10 @@ and your `batch_customers.parquet`), `configs/`, `notebooks/`, `reports/`.
 **Destroyed:** every experiment, run, metric, logged artifact, and registered model —
 including all `@champion` aliases — plus every prediction file and all Prefect run history.
 
-Step 3 is not optional cleanup: prediction files carry `model_uri` and `model_version`
-lineage columns pointing at registry versions that step 2 just deleted, so leaving them
-behind means a `latest_predictions.parquet` that silently misattributes its scores.
+Step 3 is not optional cleanup: prediction and comparison files carry `model_uri` and
+`model_version` lineage columns pointing at registry versions that step 2 just deleted, so
+leaving them behind means a `latest_predictions.parquet` that silently misattributes its
+scores.
 
 Because the ETL output survives, the recovery path skips step 1:
 
@@ -200,9 +244,23 @@ src/churn/
 ├── prediction/   # batch.py — batch scoring tasks
 └── flows/        # mlflow.py — train, log and register a single model run
 
-scripts/          # run_etl.py, run_experiments.py, run_batch_prediction.py, clean_slate.sh
+scripts/          # run_etl.py, run_experiments.py, run_batch_prediction.py, run_weekly.py, clean_slate.sh
 configs/          # per-model hyperparameter grids + batch_prediction.yml
 data/             # raw/ → processed/ → predictions/
 ```
 
 The column schema is defined once in `features/schema.py`; add/remove columns there.
+
+## Scope and future work
+
+This is a **scheduled offline analytical ML workflow**, not a production prediction service.
+It ends at batch prediction and multi-model comparison — there is no API, no online serving,
+and no automated retraining trigger.
+
+Deliberately left as future work:
+
+| Item | Status |
+|------|--------|
+| Monitoring (EvidentlyAI) | `src/churn/monitor.py` is an empty placeholder. Would run after prediction, comparing each batch against the cleaned training data as reference. |
+| Dashboard (Streamlit) | Would read the saved outputs (`latest_predictions.parquet`, `latest_model_comparison.csv`, MLflow metrics) read-only, without triggering flows. |
+| Remaining items of `WEEKLY_PIPELINE_PLAN.md` | Items 4–9 — see the status header in that file for what was built and why the rest was skipped. |

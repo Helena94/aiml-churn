@@ -2,7 +2,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from prefect import flow, task
+from prefect import flow
 
 from churn.etl import load_kaggle_credentials
 from churn.etl.extract import extract_data
@@ -16,7 +16,7 @@ def generate_flow_run_name() -> str:
     return f"etl_pipeline-{datetime.now():%A}"
 
 
-@flow(flow_run_name=generate_flow_run_name, timeout_seconds=30, log_prints=True)
+@flow(flow_run_name=generate_flow_run_name, timeout_seconds=900, log_prints=True)
 def run_etl():
     """Run the ETL pipeline."""
     logger = get_run_logger()

@@ -15,9 +15,20 @@ and visualization.
 * **Batch Predictions (Prefect):** ✅ Completed. `scripts/run_batch_prediction.py` scores a batch with the registered
   models. ⚠️ The input file `data/processed/batch_customers.parquet` is not produced by any script — supply it
   (see §4 step 3).
-* **Monitoring (EvidentlyAI):** ⏳ Pending. `src/churn/monitor.py` exists but is empty.
-* **Dashboard (Streamlit):** ⏳ Pending. The batch flow already writes `data/predictions/latest_predictions.parquet`
-  as its fixed-name feed.
+* **Model Comparison Report:** ✅ Completed. Runs at the end of the batch flow. Writes
+  `data/predictions/model_comparison_<batch_id>.csv` + `latest_model_comparison.csv` — one row per classifier
+  (probability distribution, churn count, risk split, registry lineage, agreement with the majority vote) plus
+  batch-level agreement statistics. Derived from the prediction columns; no model is reloaded.
+* **Weekly Orchestration (Prefect):** ✅ Completed. `scripts/run_weekly.py` runs ETL → training → batch prediction as
+  nested subflows on cron `0 9 * * 1` (`Europe/Belgrade`), `limit=1`. The static dataset means the schedule
+  demonstrates orchestration, not that weekly retraining improves the models.
+* **Monitoring (EvidentlyAI):** ⏳ Pending — deliberate future work. `src/churn/monitor.py` exists but is empty.
+* **Dashboard (Streamlit):** ⏳ Pending — deliberate future work. The batch flow already writes
+  `data/predictions/latest_predictions.parquet` and `latest_model_comparison.csv` as its fixed-name feeds.
+
+**Project boundary.** The project is deliberately closed here as a *scheduled offline analytical ML workflow* — no API,
+no online serving, no automated retraining trigger. See `WEEKLY_PIPELINE_PLAN.md` for which proposed items were built
+and why the rest were skipped.
 
 ## 3. Directory Structure
 
