@@ -5,6 +5,10 @@ End-to-end ML pipeline for predicting customer churn on the Kaggle
 dataset. Covers ETL (Prefect-orchestrated), feature engineering, model training with
 hyperparameter search, experiment tracking + model registry (MLflow), and batch scoring.
 
+**Setup guides:** [RUN_LOCAL.md](RUN_LOCAL.md) — everything on your machine.
+[RUN_PREFECT_CLOUD.md](RUN_PREFECT_CLOUD.md) — same code orchestrated by Prefect Cloud, and how
+to switch back and forth.
+
 ## Run order
 
 The stages are strictly sequential — each one consumes the previous one's output.
@@ -26,8 +30,9 @@ the `models:/...@champion` URIs don't resolve.
 The calls are sequential, so a failed stage stops everything downstream.
 
 ```bash
+uv run prefect profile use local   # CLI and serve() must share a backend — see RUN_LOCAL.md
 uv run prefect server start        # separate terminal — needed for the schedule to fire
-uv run python scripts/run_weekly.py
+uv run python scripts/run_weekly.py   # keep running: serve() IS the deployment
 ```
 
 That serves a `weekly-churn-analysis` deployment on cron `0 9 * * 1`
