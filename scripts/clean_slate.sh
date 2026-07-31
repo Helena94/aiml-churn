@@ -30,6 +30,7 @@ echo "==> Deleting batch prediction outputs and comparison reports"
 # Derived from the registry we just wiped — every model_uri/model_version stamp
 # in them now points at a version that no longer exists. Inputs are kept.
 rm -f ./data/predictions/churn_predictions_*.parquet ./data/predictions/latest_predictions.parquet
+rm -f ./data/predictions/churn_predictions_*.csv ./data/predictions/latest_predictions.csv
 rm -f ./data/predictions/model_comparison_*.csv ./data/predictions/latest_model_comparison.csv
 
 echo "==> Resetting Prefect database"

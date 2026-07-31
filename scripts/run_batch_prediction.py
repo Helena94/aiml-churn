@@ -10,6 +10,7 @@ from prefect.logging import get_run_logger
 
 from churn.prediction.batch import (
     add_prediction_metadata,
+    enrich_with_source,
     generate_predictions,
     load_batch_data,
     load_mlflow_model,
@@ -57,8 +58,11 @@ def batch_prediction(config_path: str | Path = DEFAULT_CONFIG, **overrides: Any)
     logger.info(f"Starting batch prediction {batch_id}")
 
     input_path = _resolve(cfg["input_path"])
-    if cfg.get("fallback_source"):
-        prepare_batch_input(input_path, _resolve(cfg["fallback_source"]))
+    # Doubles as the enrichment source below: the same cleaned dataset that stands in
+    # for an extract is the only place the true labels live.
+    fallback_source = _resolve(cfg["fallback_source"]) if cfg.get("fallback_source") else None
+    if fallback_source:
+        prepare_batch_input(input_path, fallback_source)
 
     df = load_batch_data(input_path)
     validate_batch_data(df)
@@ -97,6 +101,8 @@ def batch_prediction(config_path: str | Path = DEFAULT_CONFIG, **overrides: Any)
         batch_id=batch_id,
         model_version=resolve_model_version(primary_uri),
     )
+    predictions = enrich_with_source(predictions, fallback_source)
+
     output_dir = _resolve(cfg["output_dir"])
     output_path = save_predictions(predictions, output_dir, batch_id)
 

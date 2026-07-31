@@ -19,7 +19,7 @@ The stages are strictly sequential — each one consumes the previous one's outp
 | 0 | Kaggle credentials | put `kaggle.json` in `kaggle/` | — |
 | 1 | ETL | `python scripts/run_etl.py` | `data/processed/churn_cleaned.csv` |
 | 2 | Train + register | `python scripts/run_experiments.py` | MLflow runs + registered models in `mlflow.db` |
-| 3 | Batch scoring + comparison | `python scripts/run_batch_prediction.py` | `data/predictions/*.parquet` + `model_comparison_*.csv` |
+| 3 | Batch scoring + comparison | `python scripts/run_batch_prediction.py` | `data/predictions/*.parquet` + `*.csv` + `model_comparison_*.csv` |
 
 Skipping a step fails the next one: without step 1 training has no data, without step 2
 the `models:/...@champion` URIs don't resolve.
@@ -117,7 +117,9 @@ so dropping in a real extract takes precedence. Point a real pipeline at `input_
 
 The file must carry `customer_id` plus every column in `CATEGORICAL_COLUMNS` and
 `NUMERICAL_COLUMNS` from `features/schema.py`, with no duplicate IDs — `validate_batch_data`
-rejects it otherwise. The `churn` column is not required and is ignored if present.
+rejects it otherwise. The `churn` column is not required and is ignored if present — the true label reaches the
+output by being merged back from `fallback_source` after scoring, not by riding in on the
+input.
 
 ### 3. Batch prediction (Prefect + MLflow)
 
@@ -128,12 +130,41 @@ python scripts/run_batch_prediction.py
 ```
 
 Writes `data/predictions/churn_predictions_<batch_id>.parquet` and
-`latest_predictions.parquet`.
+`latest_predictions.parquet`, plus a `.csv` twin of each — same content, one for code to
+read and one to open or plot from.
 
-Output columns: `churn_probability_<name>` per classifier, `segment` from kmeans, and
-from the primary model `churn_probability`, `churn_prediction`, `churn_label`,
-`risk_group` (Low <0.40, Medium 0.40–0.69, High ≥0.70), plus lineage columns
-(`prediction_timestamp`, `model_uri`, `model_version`, `batch_id`).
+Prediction columns: `churn_probability_<name>` per classifier, `segment` and
+`segment_distance` from kmeans, and from the primary model `churn_probability`,
+`churn_prediction`, `churn_label`, `risk_group` (Low <0.40, Medium 0.40–0.69, High ≥0.70),
+plus lineage columns (`prediction_timestamp`, `model_uri`, `model_version`, `batch_id`).
+
+`segment_distance` is the distance to the customer's assigned centroid in the model's
+preprocessed space — how typical they are of their segment. Omitted if the segmentation
+model has no `transform`.
+
+Each row also carries its full source row merged back from `fallback_source` on
+`customer_id`: every feature column plus the true label as **`churn_actual`** (renamed so it
+can't be confused with `churn_label`, which is *predicted*). That is what makes the output
+self-contained — error metrics and feature-sliced plots need no second file:
+
+```python
+import pandas as pd
+from sklearn.metrics import roc_auc_score, confusion_matrix
+
+df = pd.read_csv("data/predictions/latest_predictions.csv")
+y = (df["churn_actual"] == "Yes").astype(int)
+roc_auc_score(y, df["churn_probability"])          # 0.8467 — matches MLflow's champion
+confusion_matrix(y, df["churn_prediction"])
+pd.crosstab(df["segment"], df["churn_actual"])     # do the clusters split on churn?
+```
+
+Because the batch is the same held-out 20% `run_experiments.py` kept out of training, metrics
+computed here reproduce the champion's test metrics in MLflow exactly.
+
+Enrichment reuses the `fallback_source` key — no separate setting. Set it to `null` (the real
+extract case, where no labels exist) and the merge is skipped: the output keeps only
+`customer_id` and the prediction columns. `src/churn/training/evaluation.py` already has
+`evaluate_classification_model()` if you'd rather not hand-roll the metrics.
 
 A missing optional model is logged and skipped; a missing primary is a hard error.
 Thresholds, model URIs, and paths all live in `configs/batch_prediction.yml`.
@@ -204,7 +235,7 @@ What it does, in order:
 |------|--------|
 | 1 | Kills any running `prefect server`, `prefect worker`, `mlflow`, `huey_consumer` process (failures ignored — nothing running is fine) |
 | 2 | Deletes the MLflow tracking DBs and artifact stores: `mlflow.db`, `src/mlflow.db`, `mlruns/`, `scripts/mlruns/`, `mlartifacts/` |
-| 3 | Deletes batch outputs: `data/predictions/churn_predictions_*.parquet`, `latest_predictions.parquet`, `model_comparison_*.csv`, `latest_model_comparison.csv` |
+| 3 | Deletes batch outputs: `data/predictions/churn_predictions_*.{parquet,csv}`, `latest_predictions.{parquet,csv}`, `model_comparison_*.csv`, `latest_model_comparison.csv` |
 | 4 | Deletes `~/.prefect/prefect.db*` and `~/.prefect/storage/*`, then rebuilds an empty schema with `prefect server database upgrade` |
 
 **Kept:** all source code, `data/raw/`, `data/processed/` (including `churn_cleaned.csv`

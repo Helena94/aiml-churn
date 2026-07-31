@@ -223,8 +223,9 @@ def generate_predictions(
     Score the batch with every loaded model.
 
     Each classifier contributes `churn_probability_<name>`; the segmentation
-    model contributes `segment`; the primary model additionally drives the
-    authoritative churn class, probability and risk group.
+    model contributes `segment` (plus `segment_distance` when it exposes
+    `transform`); the primary model additionally drives the authoritative churn
+    class, probability and risk group.
 
     Args:
         models: Mapping of model name to loaded estimator.
@@ -250,6 +251,11 @@ def generate_predictions(
     for name, model in models.items():
         if name == segmentation:
             out["segment"] = model.predict(X)
+            # Distance to the assigned centroid, in the model's preprocessed space —
+            # how typical a customer is of their segment. Guarded: a clustering model
+            # without `transform` should cost the column, not the batch.
+            if hasattr(model, "transform"):
+                out["segment_distance"] = model.transform(X).min(axis=1)
         else:
             out[f"churn_probability_{name}"] = _churn_probability(model, X, name)
 
@@ -293,6 +299,47 @@ def add_prediction_metadata(
 
 
 @task
+def enrich_with_source(
+    predictions: pd.DataFrame,
+    source_path: str | Path | None,
+) -> pd.DataFrame:
+    """
+    Attach each scored customer's cleaned-source row: features plus the true label.
+
+    The scoring frame carries only `customer_id` and prediction columns, which is
+    enough to act on but not to analyse. Merging the cleaned dataset back in gives
+    a self-contained output: error metrics against `churn_actual`, and risk sliced
+    by contract, tenure or charges — with no second file to join.
+
+    The target is renamed `churn_actual` so it cannot be mistaken for `churn_label`,
+    which is the *predicted* Yes/No.
+
+    Args:
+        predictions: Prediction DataFrame, one row per scored customer.
+        source_path: Cleaned CSV to merge from, or None to skip enrichment (a real
+            upstream extract has no labels to attach).
+
+    Returns:
+        The predictions with the source columns merged in, or unchanged if no
+        source was given.
+    """
+    if not source_path:
+        logger.info("No enrichment source configured; predictions keep the identifier only")
+        return predictions
+
+    source = pd.read_csv(source_path).rename(columns={TARGET_COLUMN[0]: "churn_actual"})
+    # how="right": source columns land first, and the scored rows and their order win.
+    enriched = source.merge(predictions, on=CUSTOMER_ID, how="right")
+
+    missing = int(enriched["churn_actual"].isna().sum())
+    if missing:
+        logger.warning(f"{missing} scored customers had no matching row in {source_path}")
+
+    logger.info(f"Enriched predictions with {len(source.columns) - 1} column(s) from {source_path}")
+    return enriched
+
+
+@task
 def save_predictions(
     predictions: pd.DataFrame,
     output_dir: str | Path,
@@ -301,13 +348,16 @@ def save_predictions(
     """
     Write the timestamped historical file and the latest-predictions file.
 
+    Both are written as parquet (the format downstream code reads) and as CSV
+    (the format a human opens or plots from).
+
     Args:
         predictions: Prediction DataFrame with metadata.
         output_dir: Directory to write into (created if absent).
         batch_id: Identifier used in the historical filename.
 
     Returns:
-        Path of the historical file.
+        Path of the historical parquet file.
     """
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -316,8 +366,10 @@ def save_predictions(
     latest = out_dir / "latest_predictions.parquet"
     predictions.to_parquet(historical, index=False)
     predictions.to_parquet(latest, index=False)
+    predictions.to_csv(historical.with_suffix(".csv"), index=False)
+    predictions.to_csv(latest.with_suffix(".csv"), index=False)
 
-    logger.info(f"Saved predictions to {historical} and {latest}")
+    logger.info(f"Saved predictions to {historical} and {latest} (.parquet and .csv)")
     return historical
 
 

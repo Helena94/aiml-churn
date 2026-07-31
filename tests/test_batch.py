@@ -11,6 +11,7 @@ from churn.features.builder import split_train_test
 from churn.prediction.batch import (
     FEATURE_COLUMNS,
     assign_risk_group,
+    enrich_with_source,
     generate_predictions,
     load_batch_data,
     log_batch_summary,
@@ -44,7 +45,24 @@ class StubClassifier:
 
 
 class StubSegmenter:
-    """Fake clustering model — labels only, no predict_proba."""
+    """Fake clustering model — labels and centroid distances, no predict_proba."""
+
+    def __init__(self, labels, distances=None):
+        self._labels = np.asarray(labels)
+        # (n_samples, n_clusters), as sklearn's KMeans.transform returns.
+        self._distances = (
+            np.zeros((len(self._labels), 2)) if distances is None else np.asarray(distances)
+        )
+
+    def predict(self, X):
+        return self._labels
+
+    def transform(self, X):
+        return self._distances
+
+
+class StubSegmenterNoTransform:
+    """Clustering model that cannot report distances (no `transform` at all)."""
 
     def __init__(self, labels):
         self._labels = np.asarray(labels)
@@ -188,6 +206,28 @@ class TestGeneratePredictions:
         assert out["churn_probability_random_forest"].tolist() == [0.2, 0.4, 0.6, 0.9]
         assert out["segment"].tolist() == [0, 1, 1, 0]
 
+    def test_segment_distance_is_the_nearest_centroid(self):
+        models = self._models()
+        models["segment"] = StubSegmenter(
+            [0, 1, 1, 0],
+            distances=[[0.5, 2.0], [3.0, 0.25], [4.0, 1.5], [0.75, 6.0]],
+        )
+        out = generate_predictions.fn(
+            models, _batch_df(), primary="primary", segmentation="segment"
+        )
+
+        assert out["segment_distance"].tolist() == [0.5, 0.25, 1.5, 0.75]
+
+    def test_segment_distance_omitted_without_transform(self):
+        models = self._models()
+        models["segment"] = StubSegmenterNoTransform([0, 1, 1, 0])
+        out = generate_predictions.fn(
+            models, _batch_df(), primary="primary", segmentation="segment"
+        )
+
+        assert out["segment"].tolist() == [0, 1, 1, 0]
+        assert "segment_distance" not in out.columns
+
     def test_primary_column_not_duplicated(self):
         # `churn_probability` supersedes the primary's own prefixed column.
         assert "churn_probability_primary" not in self._run().columns
@@ -219,6 +259,58 @@ class TestGeneratePredictions:
             generate_predictions.fn({}, _batch_df(), primary="primary")
 
 
+class TestEnrichWithSource:
+    """Tests for enrich_with_source task."""
+
+    def _source(self, tmp_path, ids):
+        """Cleaned-CSV stand-in: features plus the identifier and target columns."""
+        df = pd.DataFrame({"customer_id": list(ids)})
+        for col in FEATURE_COLUMNS:
+            df[col] = list(range(len(df)))
+        df["churn"] = ["Yes" if i % 2 == 0 else "No" for i in range(len(df))]
+        path = tmp_path / "cleaned.csv"
+        df.to_csv(path, index=False)
+        return path
+
+    def _predictions(self, ids=("id-2", "id-0")):
+        return pd.DataFrame(
+            {"customer_id": list(ids), "churn_probability": [0.8, 0.1]},
+        )
+
+    def test_attaches_label_and_features(self, tmp_path):
+        source = self._source(tmp_path, [f"id-{i}" for i in range(4)])
+
+        out = enrich_with_source.fn(self._predictions(), source)
+
+        assert out["churn_actual"].tolist() == ["Yes", "Yes"]
+        assert set(FEATURE_COLUMNS).issubset(out.columns)
+        assert "churn" not in out.columns  # renamed, never shadows the predicted label
+
+    def test_scored_rows_and_order_are_preserved(self, tmp_path):
+        source = self._source(tmp_path, [f"id-{i}" for i in range(4)])
+
+        out = enrich_with_source.fn(self._predictions(), source)
+
+        # Only the two scored customers, in the order they were scored.
+        assert out["customer_id"].tolist() == ["id-2", "id-0"]
+        assert out["churn_probability"].tolist() == [0.8, 0.1]
+
+    def test_unmatched_customer_gets_a_null_label(self, tmp_path):
+        source = self._source(tmp_path, ["id-0", "id-1"])
+
+        out = enrich_with_source.fn(self._predictions(ids=("id-0", "id-99")), source)
+
+        assert len(out) == 2
+        assert out["churn_actual"].isna().tolist() == [False, True]
+
+    def test_no_source_returns_predictions_unchanged(self):
+        predictions = self._predictions()
+
+        out = enrich_with_source.fn(predictions, None)
+
+        assert out is predictions
+
+
 class TestSaveAndSummary:
     """Tests for save_predictions and log_batch_summary tasks."""
 
@@ -241,6 +333,14 @@ class TestSaveAndSummary:
         assert historical.exists()
         assert (tmp_path / "latest_predictions.parquet").exists()
         assert len(pd.read_parquet(tmp_path / "latest_predictions.parquet")) == 4
+
+    def test_writes_csv_alongside_parquet(self, tmp_path):
+        save_predictions.fn(self._predictions(), tmp_path, "20260721T120000")
+
+        assert (tmp_path / "churn_predictions_20260721T120000.csv").exists()
+        latest = pd.read_csv(tmp_path / "latest_predictions.csv")
+        assert len(latest) == 4
+        assert latest["churn_probability"].tolist() == [0.1, 0.5, 0.8, 0.95]
 
     def test_summary_counts(self):
         summary = log_batch_summary.fn(self._predictions(), "out.parquet")
