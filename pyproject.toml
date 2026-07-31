@@ -7,18 +7,17 @@ name = "churn"
 version = "0.1.0"
 description = "Telco customer churn prediction"
 requires-python = ">=3.10"
+# Runtime only — what the ETL/training/batch flows actually import. Prefect Cloud managed
+# execution caps a run at 2 GB of RAM *including* dependency installation, so the notebook-only
+# packages are kept out of here (see the `eda` group below).
 dependencies = [
-    "anthropic>=0.78.0",
     "kaggle>=1.6,<1.7",
     "mlflow>=3.9.0",
     "pandas>=2.3.3",
     "prefect>=3.6.13",
     "python-dotenv>=1.2.1",
     "scikit-learn>=1.7.2",
-    "squarify>=0.4.4",
-    "sweetviz>=2.3.1",
     "xgboost>=3.1.3",
-    "ydata-profiling>=4.18.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -29,6 +28,14 @@ dev = [
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
     "pytest>=8.0.0",
+]
+# Notebook-only. Imported nowhere in src/ or scripts/, and `pip install -e .` ignores dependency
+# groups, so these never reach the Prefect Cloud container.
+eda = [
+    "anthropic>=0.78.0",
+    "squarify>=0.4.4",
+    "sweetviz>=2.3.1",
+    "ydata-profiling>=4.18.0",
 ]
 
 [tool.pytest.ini_options]

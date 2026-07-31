@@ -17,7 +17,15 @@ import numpy as np
 import pandas as pd
 from mlflow.tracking import MlflowClient
 from prefect import task
+from prefect.assets import materialize
 
+from churn.assets import (
+    BATCH_INPUT_ASSET,
+    CLEANED_DATA_ASSET,
+    COMPARISON_ASSET,
+    PREDICTIONS_ASSET,
+    add_metadata,
+)
 from churn.features.builder import build_features, split_train_test
 from churn.features.schema import (
     CATEGORICAL_COLUMNS,
@@ -36,7 +44,10 @@ RISK_GROUPS = ("Low", "Medium", "High")
 PROBABILITY_PREFIX = "churn_probability_"
 
 
-@task
+# A materializing task declares its assets at import time, so these keys track the default
+# paths in configs/batch_prediction.yml. `with_options` can override asset_deps at call time
+# but not assets, so pointing the config elsewhere leaves these keys behind.
+@materialize(BATCH_INPUT_ASSET, asset_deps=[CLEANED_DATA_ASSET])
 def prepare_batch_input(input_path: str | Path, source_path: str | Path) -> bool:
     """
     Build the batch input from the held-out test rows when no external extract has landed.
@@ -339,7 +350,7 @@ def enrich_with_source(
     return enriched
 
 
-@task
+@materialize(PREDICTIONS_ASSET, asset_deps=[BATCH_INPUT_ASSET])
 def save_predictions(
     predictions: pd.DataFrame,
     output_dir: str | Path,
@@ -370,6 +381,14 @@ def save_predictions(
     predictions.to_csv(latest.with_suffix(".csv"), index=False)
 
     logger.info(f"Saved predictions to {historical} and {latest} (.parquet and .csv)")
+    add_metadata(
+        PREDICTIONS_ASSET,
+        {
+            "batch_id": batch_id,
+            "rows": len(predictions),
+            "predicted_churners": int(predictions["churn_prediction"].sum()),
+        },
+    )
     return historical
 
 
@@ -479,7 +498,7 @@ def model_comparison(
     return comparison
 
 
-@task
+@materialize(COMPARISON_ASSET, asset_deps=[PREDICTIONS_ASSET])
 def save_comparison(
     comparison: pd.DataFrame,
     output_dir: str | Path,
@@ -512,6 +531,7 @@ def save_comparison(
     comparison.to_csv(latest, index=False)
 
     logger.info(f"Saved model comparison to {historical} and {latest}")
+    add_metadata(COMPARISON_ASSET, {"batch_id": batch_id, "models_compared": len(comparison)})
     return historical
 
 

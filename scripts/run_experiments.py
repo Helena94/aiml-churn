@@ -4,8 +4,10 @@ from pathlib import Path
 import pandas as pd
 import yaml
 from prefect import flow, task
+from prefect.assets import materialize
 from prefect.futures import wait
 
+from churn.assets import CLEANED_DATA_ASSET, add_metadata, model_asset
 from churn.features.builder import split_train_test
 from churn.flows.mlflow import register_champion, run_with_mlflow
 
@@ -30,6 +32,10 @@ CLASSIFIERS = ("logistic_regression", "random_forest", "xgboost")
 PRIMARY_REGISTRY_NAME = "telco-churn-model"
 PRIMARY_METRIC = "roc_auc"
 
+# Asset keys are derived from the registry names so the two can't drift.
+MODEL_ASSETS = {name: model_asset(registry) for name, registry in REGISTRY_NAMES.items()}
+PRIMARY_ASSET = model_asset(PRIMARY_REGISTRY_NAME)
+
 
 @task(task_run_name="run-experiment-{model_name}")
 def run_experiment(model_name: str, config, X_train, X_test, y_train, y_test):
@@ -39,12 +45,15 @@ def run_experiment(model_name: str, config, X_train, X_test, y_train, y_test):
     return (model_name, metrics, run_id)
 
 
-@task
+@materialize(*MODEL_ASSETS.values(), PRIMARY_ASSET, asset_deps=[CLEANED_DATA_ASSET])
 def register_models(results: list[tuple[str, dict, str]]) -> None:
     """Register every trained model under its own name, then alias the best classifier as primary."""
-    for model_name, _, run_id in results:
+    for model_name, metrics, run_id in results:
         version = register_champion(run_id, model_name, REGISTRY_NAMES[model_name])
         logger.info(f"Registered {REGISTRY_NAMES[model_name]} v{version} (champion)")
+        # Nested values (the confusion matrix) don't render as asset metadata.
+        scalars = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+        add_metadata(MODEL_ASSETS[model_name], {"version": version, **scalars})
 
     # kmeans is clustering — it has no roc_auc and never competes for primary.
     ranked = [(m, mx) for m, mx, _ in results if m in CLASSIFIERS and PRIMARY_METRIC in mx]
@@ -56,6 +65,10 @@ def register_models(results: list[tuple[str, dict, str]]) -> None:
     best_run_id = next(r for m, _, r in results if m == best_name)
     version = register_champion(best_run_id, best_name, PRIMARY_REGISTRY_NAME)
     logger.info(f"Primary champion: {best_name} -> {PRIMARY_REGISTRY_NAME} v{version}")
+    add_metadata(
+        PRIMARY_ASSET,
+        {"version": version, "model": best_name, PRIMARY_METRIC: dict(ranked)[best_name][PRIMARY_METRIC]},
+    )
 
 
 @flow(name="run_experiments")

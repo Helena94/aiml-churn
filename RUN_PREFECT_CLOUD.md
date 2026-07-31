@@ -64,41 +64,121 @@ executes locally and reports to the Cloud UI.
 
 ## 3. Mode B — execute on Cloud's managed infrastructure
 
-A deployment of this kind already exists in the workspace, created with `prefect-cloud deploy`:
+Nothing of yours runs: Prefect clones the repo into a container it owns, installs the
+dependencies, and executes the flow. Your laptop can be closed.
 
 | Field | Value |
 |-------|-------|
-| Deployment | `weekly_pipeline/weekly-churn-analysis` |
 | Entrypoint | `scripts/run_weekly.py:weekly_pipeline` |
-| Work pool | `default-work-pool` (type `prefect:managed` — Prefect runs it, no worker of yours) |
-| Source | clones `github.com/Helena94/aiml-churn` @ `main`, then `uv pip install -r requirements.txt` |
-| Schedule | none |
+| Work pool | type `prefect:managed` — Prefect runs it, no worker of yours |
+| Source | clones the GitHub repo, then `pip install -r requirements.txt` (which is just `-e .`) |
+| Schedule | set separately with `prefect-cloud schedule` |
+
+The container is a **fresh clone with a disposable filesystem**, which dictates everything
+below: `kaggle/`, `data/` and `*.db` are gitignored, so credentials must arrive as secrets and
+anything worth keeping must be written somewhere remote. All three stages run inside one flow
+run, so they do share a filesystem for the duration — only the model registry and the outputs
+need to outlive it.
+
+### 3.1 One-time setup
+
+**a. A remote MLflow server.** [DagsHub](https://dagshub.com) is free, gives a hosted MLflow
+tracking server *and* artifact storage in one signup, and connects to an existing GitHub repo.
+Sign up, connect this repo, then take the tracking URL and a token from the repo's *Remote →
+Experiments* tab.
+
+Any MLflow server works — `MLFLOW_TRACKING_URI` is all the code reads
+(`churn/flows/mlflow.py`). Unset, it still falls back to the local `mlflow.db`, so nothing about
+local runs changes.
+
+**b. Verify it locally before spending any Cloud compute.** This is the step that catches
+problems for free — the model URIs in `configs/batch_prediction.yml` use aliases
+(`models:/<name>@champion`), and an MLflow server that doesn't support aliases would fail
+stage 3 only after a full training run:
 
 ```bash
-uv run prefect deployment run 'weekly_pipeline/weekly-churn-analysis'
+export MLFLOW_TRACKING_URI=https://dagshub.com/<user>/<repo>.mlflow
+export MLFLOW_TRACKING_USERNAME=<user>
+export MLFLOW_TRACKING_PASSWORD=<dagshub-token>
+python scripts/run_experiments.py && python scripts/run_batch_prediction.py
 ```
 
-Note the flow name is `weekly_pipeline` (the Python function name), not the `@flow(name=...)`
-value `weekly-churn-analysis` used in Mode A. Both may appear in `prefect deployment ls` at the
-same time; they are different deployments.
+Green, with the models visible in the DagsHub UI ⇒ continue. If aliases turn out to be
+unsupported, change those URIs to `models:/<name>/latest` and re-run.
 
-### Known limitation of Mode B
+**c. Prefect Cloud + GitHub:**
 
-**This mode currently cannot complete the pipeline.** The managed container clones the public
-repo, and `.gitignore` excludes `kaggle/`, `data/`, `*.json`, and `*.db`. So the container has:
+```bash
+uvx prefect-cloud login
+uvx prefect-cloud github setup      # only needed for a private repo
+```
 
-- no `kaggle/kaggle.json` → `load_kaggle_credentials` raises `FileNotFoundError` and stage 1
-  fails immediately (there is no environment-variable fallback in the code today);
-- no `data/`, so nothing to fall back on;
-- an ephemeral filesystem — the SQLite MLflow store is created inside the container and
-  discarded when the run ends, so runs and registered models would not persist anyway.
+### 3.2 Deploy
 
-Making Mode B work end to end needs credentials injected as Prefect secrets or job-variable
-env vars, a code path that reads them, and a remote MLflow tracking server plus remote artifact
-storage. That is deliberately out of scope for this project — see the *Scope and future work*
-section of the [README](README.md#scope-and-future-work).
+Push to GitHub first — the container clones the repo, so uncommitted work is invisible to it.
+Secrets are typed straight into this command; they are stored in the workspace, never in the repo.
 
-Use **Mode A** for a working demonstration of Cloud orchestration.
+```bash
+uvx prefect-cloud deploy scripts/run_weekly.py:weekly_pipeline \
+  --from <github-user>/<repo> \
+  --name weekly-churn-analysis \
+  --with-requirements requirements.txt \
+  --env MLFLOW_TRACKING_URI=https://dagshub.com/<user>/<repo>.mlflow \
+  --env MLFLOW_TRACKING_USERNAME=<user> \
+  --secret MLFLOW_TRACKING_PASSWORD=<dagshub-token> \
+  --secret KAGGLE_USERNAME=<kaggle-username> \
+  --secret KAGGLE_KEY=<kaggle-key>
+```
+
+`--env` values are visible in the UI; `--secret` values are write-only. `KAGGLE_USERNAME` /
+`KAGGLE_KEY` are the same two values found in `kaggle/kaggle.json`.
+
+### 3.3 Run it, then schedule it
+
+```bash
+uvx prefect-cloud run weekly-churn-analysis/weekly-churn-analysis
+uvx prefect-cloud schedule weekly-churn-analysis/weekly-churn-analysis "0 7 * * 1"
+```
+
+Verify the manual run first — a broken schedule burns the free compute quota every week and
+fills the run history with failures.
+
+`prefect-cloud schedule` takes **no timezone flag**, so the cron is UTC. `0 7 * * 1` is Monday
+09:00 in Belgrade during summer (CEST) and 08:00 in winter (CET); the `serve()` schedule in
+Mode A is timezone-aware and does not drift. Use the Cloud UI's schedule editor if you need a
+timezone attached.
+
+A successful run leaves: three green stages in Prefect Cloud, a new version of each model in
+DagsHub, the batch outputs as MLflow artifacts under a `batch-<batch_id>` run, and a connected
+asset graph (see §5).
+
+### 3.4 Free-tier limits worth knowing
+
+| Limit | Value | Relevance |
+|-------|-------|-----------|
+| Compute hours | 10 / workspace / month | A weekly run of ~10–15 min uses about 1 h/month |
+| Memory | 2 GB, **including `pip install`** | Why the notebook-only packages were moved into the `eda` dependency group — `pip install -e .` ignores dependency groups, so they never reach the container |
+| Max run time | 24 h | Not a factor here |
+
+If a run dies with a memory error, the likely cause is `run_experiments.py` training all four
+models concurrently. Serialize them:
+
+```python
+from prefect.task_runners import ThreadPoolTaskRunner
+
+@flow(name="run_experiments", task_runner=ThreadPoolTaskRunner(max_workers=1))
+```
+
+### 3.5 What made this work
+
+Four changes, all inert when running locally:
+
+| Blocker | Fix |
+|---------|-----|
+| `src/churn` never installed; `requirements.txt` was stale | `requirements.txt` is now `-e .`, so the container installs the project from `pyproject.toml`. **Editable** matters: `mlflow_tracking_uri()` resolves paths relative to `__file__`, which a `site-packages` install would break. |
+| `load_kaggle_credentials` required `kaggle/kaggle.json` | Already-set `KAGGLE_USERNAME` / `KAGGLE_KEY` now win, and the file is the fallback. |
+| MLflow wrote to a container-local SQLite file | `mlflow_tracking_uri()` returns `$MLFLOW_TRACKING_URI` when set, else the local SQLite path. |
+| Predictions written to a disposable `data/predictions/` | `run_batch_prediction.py` logs that batch's parquet + CSVs and its summary metrics to MLflow, which is remote. |
 
 ## 4. Switching between backends
 
@@ -123,6 +203,52 @@ Rules of thumb:
 - `scripts/clean_slate.sh` only clears **local** Prefect state; Cloud run history must be
   deleted from the Cloud UI.
 
+## 5. Assets — the lineage graph
+
+Prefect **assets** are the things the pipeline produces, as opposed to the tasks that produce
+them. Declaring them turns three separate flows into one connected graph under *Assets* in the
+Cloud UI, showing what each run touched and where a stale file came from.
+
+Assets are a **Prefect Cloud feature**; with a local backend the decorators behave as ordinary
+tasks and nothing is recorded.
+
+```
+kaggle://blastchar/telco-customer-churn        (referenced, never written)
+  └─ file://data/raw/extraction_metadata_log.json
+       └─ file://data/processed/churn_cleaned.csv  +  transformation_log.json
+            ├─ mlflow://telco-churn-logistic-regression
+            ├─ mlflow://telco-churn-random-forest
+            ├─ mlflow://telco-churn-xgboost
+            ├─ mlflow://telco-churn-segmentation
+            ├─ mlflow://telco-churn-model              (the primary champion)
+            └─ file://data/processed/batch_customers.parquet
+                 └─ file://data/predictions/latest_predictions.parquet
+                      └─ file://data/predictions/latest_model_comparison.csv
+```
+
+Keys live in one place, `src/churn/assets.py`, for the same reason column names live in
+`features/schema.py`: a typo doesn't fail, it silently splits one node into two.
+
+Each materialization carries metadata visible on the asset: row and column counts on the cleaned
+CSV, the registered version plus every scalar metric (`roc_auc`, `f1`, …) on each model, and the
+batch ID with predicted-churner count on the predictions.
+
+Two edges cannot be inferred from the task graph and are declared explicitly:
+
+- **cleaned CSV → models**, because `run_experiments.py` reads the CSV with `pd.read_csv`
+  rather than receiving it from an upstream task;
+- **models → predictions**, because `load_mlflow_model` takes URI *strings*. This one is
+  declared at the call site in `run_batch_prediction.py` using
+  `save_predictions.with_options(asset_deps=...)`, built from the config so no model name is
+  hardcoded. (`with_options` accepts `asset_deps` but not `assets` — the assets themselves are
+  fixed at import time.)
+
+The `file://` keys describe container-local paths, which is correct for lineage; the durable
+copy of each output is the MLflow artifact from §3.5.
+
+One trap worth knowing: `@materialize` **is** a task decorator. Stacking `@task` on top of it
+wraps the materializing task and the asset is never recorded.
+
 ## Troubleshooting
 
 **`Deployment '.../...' not found!`** — usually a backend mismatch: the deployment was served
@@ -134,3 +260,18 @@ the active backend actually has. Remember `serve()` deployments vanish when the 
 
 **Run stuck in `Pending` / `Scheduled` in Mode B** — the managed pool is provisioning, or the
 pull step failed. Open the flow run in the Cloud UI and read the infrastructure logs.
+
+**`ModuleNotFoundError: No module named 'churn'` in Mode B** — the pull step didn't install the
+project. Check that `requirements.txt` still contains `-e .` and that `--with-requirements
+requirements.txt` was passed to `deploy`.
+
+**`FileNotFoundError: Kaggle credentials not found` in Mode B** — the `KAGGLE_USERNAME` /
+`KAGGLE_KEY` secrets are missing or misnamed on the deployment. Re-run `deploy` with both
+`--secret` flags.
+
+**Models train but stage 3 can't resolve `models:/...@champion`** — either `MLFLOW_TRACKING_URI`
+isn't reaching the container (stage 2 wrote to a SQLite file that no longer exists), or the
+server doesn't support aliases. Check the DagsHub UI for the new versions, then §3.1b.
+
+**No assets in the Cloud UI** — assets need a Cloud backend; a local profile records nothing.
+Also confirm no `@task` sits above a `@materialize`.

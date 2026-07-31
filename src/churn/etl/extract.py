@@ -10,6 +10,8 @@ from prefect import task
 from prefect.assets import materialize
 from prefect.logging import get_run_logger
 
+from churn.assets import EXTRACTION_LOG_ASSET, KAGGLE_SOURCE_ASSET
+
 from .download import download_dataset
 
 
@@ -39,7 +41,7 @@ def compute_dataset_hash(df) -> str:
     return hashlib.md5(pd.util.hash_pandas_object(df).values).hexdigest()
 
 
-@materialize("file://data/raw/extraction_metadata_log.json")
+@materialize(EXTRACTION_LOG_ASSET, asset_deps=[KAGGLE_SOURCE_ASSET])
 def write_extraction_metadata(data_path, metadata):
     """
     Write extraction metadata to a JSON file.

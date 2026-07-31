@@ -4,10 +4,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import mlflow
 import yaml
 from prefect import flow
 from prefect.logging import get_run_logger
 
+from churn.assets import BATCH_INPUT_ASSET, model_asset
+from churn.flows.mlflow import mlflow_tracking_uri
 from churn.prediction.batch import (
     add_prediction_metadata,
     enrich_with_source,
@@ -104,7 +107,11 @@ def batch_prediction(config_path: str | Path = DEFAULT_CONFIG, **overrides: Any)
     predictions = enrich_with_source(predictions, fallback_source)
 
     output_dir = _resolve(cfg["output_dir"])
-    output_path = save_predictions(predictions, output_dir, batch_id)
+    # The models are loaded from URI strings, not passed between tasks, so the
+    # models -> predictions edge has to be declared here where the config is known.
+    output_path = save_predictions.with_options(
+        asset_deps=[BATCH_INPUT_ASSET, *(model_asset(u) for u in [primary_uri, *optional.values()])]
+    )(predictions, output_dir, batch_id)
 
     comparison = model_comparison(
         predictions,
@@ -117,6 +124,17 @@ def batch_prediction(config_path: str | Path = DEFAULT_CONFIG, **overrides: Any)
 
     summary = log_batch_summary(predictions, output_path)
     summary["comparison_path"] = str(comparison_path)
+
+    # A deployment's filesystem does not outlive the run, so the outputs are pushed to MLflow —
+    # already configured, already remote when MLFLOW_TRACKING_URI is set. Only this batch's
+    # files are logged; output_dir also holds every previous batch.
+    mlflow.set_tracking_uri(tracking_uri or mlflow_tracking_uri())
+    with mlflow.start_run(run_name=f"batch-{batch_id}"):
+        for artifact in (output_path, output_path.with_suffix(".csv"), comparison_path):
+            mlflow.log_artifact(str(artifact), artifact_path=batch_id)
+        mlflow.log_metrics({k: v for k, v in summary.items() if isinstance(v, (int, float))})
+        logger.info(f"Logged batch outputs to MLflow under run batch-{batch_id}")
+
     return summary
 
 

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import mlflow
@@ -10,8 +11,14 @@ from churn.training.train import train_model
 
 
 def mlflow_tracking_uri() -> str:
-    """Tracking/registry URI for the project-local SQLite store."""
-    return "sqlite:///" + str(Path(__file__).resolve().parents[3] / "mlflow.db") + "?timeout=30"
+    """Remote tracking server if MLFLOW_TRACKING_URI is set, else the project-local SQLite store.
+
+    A container's filesystem does not survive the run, so any deployment needs a remote
+    server; the SQLite default keeps local runs working with no configuration.
+    """
+    return os.getenv("MLFLOW_TRACKING_URI") or (
+        "sqlite:///" + str(Path(__file__).resolve().parents[3] / "mlflow.db") + "?timeout=30"
+    )
 
 
 def register_champion(

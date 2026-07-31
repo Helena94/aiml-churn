@@ -1,13 +1,21 @@
 import json
 import pandas as pd
-from prefect import task
 from prefect.assets import materialize
 
+from churn.assets import (
+    CLEANED_DATA_ASSET,
+    EXTRACTION_LOG_ASSET,
+    TRANSFORMATION_LOG_ASSET,
+    add_metadata,
+)
 
-@task(name="load_data")
+
+# `materialize` is itself a task decorator — stacking @task on top would wrap the
+# materializing task and lose the asset, so this is the only decorator here.
 @materialize(
-    "file://data/processed/transformation_log.json",
-    "file://data/processed/churn_cleaned.csv",
+    TRANSFORMATION_LOG_ASSET,
+    CLEANED_DATA_ASSET,
+    asset_deps=[EXTRACTION_LOG_ASSET],
 )
 def load_data(
     df: pd.DataFrame,
@@ -45,3 +53,5 @@ def load_data(
         json.dump(transformation_log, f, indent=2)
     if logger:
         logger.info(f"  Saved: {log_path}")
+
+    add_metadata(CLEANED_DATA_ASSET, {"rows": len(df), "columns": len(df.columns)})

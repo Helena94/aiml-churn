@@ -9,10 +9,15 @@ No account and no internet needed (except the Kaggle download in step 1).
 |------|-----|
 | Python ≥ 3.10 | any install |
 | [uv](https://docs.astral.sh/uv/) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| Dependencies | `uv sync --group dev` |
+| Dependencies | `uv sync --group dev` (add `--group eda` to run the notebooks) |
 | Kaggle API token | download from kaggle.com → Account → Create New API Token, save as `kaggle/kaggle.json` |
 
 `kaggle/` and `data/` are gitignored, so the token and the datasets never leave your machine.
+
+Nothing here needs environment variables. MLflow writes to the project-local `mlflow.db` unless
+`MLFLOW_TRACKING_URI` is set, and Kaggle credentials come from `kaggle/kaggle.json` unless
+`KAGGLE_USERNAME` / `KAGGLE_KEY` are already in the environment — the remote paths are only used
+by the managed deployment in [RUN_PREFECT_CLOUD.md](RUN_PREFECT_CLOUD.md).
 
 ## 1. Check which Prefect backend you are on
 

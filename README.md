@@ -16,7 +16,7 @@ The stages are strictly sequential — each one consumes the previous one's outp
 | # | Step | Command | Produces |
 |---|------|---------|----------|
 | 0 | Install deps | `uv sync --group dev` | `.venv/` |
-| 0 | Kaggle credentials | put `kaggle.json` in `kaggle/` | — |
+| 0 | Kaggle credentials | put `kaggle.json` in `kaggle/`, or set `KAGGLE_USERNAME` + `KAGGLE_KEY` | — |
 | 1 | ETL | `python scripts/run_etl.py` | `data/processed/churn_cleaned.csv` |
 | 2 | Train + register | `python scripts/run_experiments.py` | MLflow runs + registered models in `mlflow.db` |
 | 3 | Batch scoring + comparison | `python scripts/run_batch_prediction.py` | `data/predictions/*.parquet` + `*.csv` + `model_comparison_*.csv` |
@@ -52,13 +52,27 @@ is not evidence that weekly retraining improves the models.
 Dependencies are managed with [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync                # runtime deps
-uv sync --group dev    # + pytest, jupyter, ipykernel
+uv sync                            # runtime deps — what the flows import
+uv sync --group dev                # + pytest, jupyter, ipykernel
+uv sync --group dev --group eda    # + the notebook-only EDA stack
 ```
 
-Kaggle credentials are required for the ETL download step. Put them in
-`kaggle/kaggle.json` (loaded into env vars at runtime by
-`etl/load_kaggle_credentials.py`).
+The `eda` group (`ydata-profiling`, `sweetviz`, `squarify`, `anthropic`) is imported only by
+the notebooks, never by `src/` or `scripts/`. Keeping it out of the runtime dependencies is
+what lets the pipeline install inside Prefect Cloud's 2 GB managed container — see
+[RUN_PREFECT_CLOUD.md](RUN_PREFECT_CLOUD.md).
+
+Kaggle credentials are required for the ETL download step. Put them in `kaggle/kaggle.json`,
+or set `KAGGLE_USERNAME` and `KAGGLE_KEY` directly — `etl/load_kaggle_credentials.py` prefers
+the environment and falls back to the file, so a deployment can supply them as secrets.
+
+Environment variables the pipeline reads, all optional:
+
+| Variable | Effect when unset |
+|----------|-------------------|
+| `MLFLOW_TRACKING_URI` | Falls back to the project-local `mlflow.db` |
+| `MLFLOW_TRACKING_USERNAME` / `_PASSWORD` | Only needed by an authenticated remote tracking server |
+| `KAGGLE_USERNAME` / `KAGGLE_KEY` | Falls back to `kaggle/kaggle.json` |
 
 `.env` is optional and only holds `ANTHROPIC_API_KEY`; no pipeline stage needs it.
 
@@ -273,6 +287,7 @@ pytest tests/test_transform.py   # one file
 
 ```
 src/churn/
+├── assets.py     # Prefect asset keys + metadata helper (the lineage graph)
 ├── etl/          # Prefect tasks/flows: download, extract, transform, load
 ├── features/     # schema.py (column defs), preprocessing.py (ColumnTransformer), builder.py (split/build)
 ├── models/       # one builder per model → Pipeline(preprocessing → model) wrapped in a CV search
@@ -285,7 +300,17 @@ configs/          # per-model hyperparameter grids + batch_prediction.yml
 data/             # raw/ → processed/ → predictions/
 ```
 
-The column schema is defined once in `features/schema.py`; add/remove columns there.
+The column schema is defined once in `features/schema.py`; add/remove columns there. Asset keys
+are defined once in `assets.py` for the same reason.
+
+## Assets (Prefect Cloud)
+
+Every output of the pipeline is declared as a Prefect **asset**, so the three flows appear as one
+connected lineage graph in the Cloud UI — from `kaggle://blastchar/telco-customer-churn` through
+the cleaned CSV and the five registered models to `latest_model_comparison.csv` — each carrying
+metadata such as row counts, model versions and `roc_auc`. Assets require a Cloud backend;
+locally the decorators behave as ordinary tasks. Details in
+[RUN_PREFECT_CLOUD.md](RUN_PREFECT_CLOUD.md#5-assets--the-lineage-graph).
 
 ## Scope and future work
 
