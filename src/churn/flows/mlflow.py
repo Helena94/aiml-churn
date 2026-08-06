@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 
 import mlflow
@@ -94,14 +95,27 @@ def run_with_mlflow(
         scalar_metrics = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
         mlflow.log_metrics(scalar_metrics)
 
-        # Log the trained model as an artifact. The format is explicit because newer MLflow
-        # defaults to "skops", which refuses to serialize a SearchCV — it carries a scorer and
-        # a StratifiedKFold that skops treats as untrusted types. Pinning the format here keeps
-        # local and Prefect Cloud identical no matter which MLflow the container resolves.
-        mlflow.sklearn.log_model(
-            model,
-            name="model-{}".format(model_name),
-            serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
-        )
+        # Save the model locally, then upload it under the *run's* artifact path.
+        #
+        # Not `log_model(name=...)`: in MLflow 3 that creates a "logged model" entity stored
+        # outside the run's artifact tree, and register_model("runs:/<id>/<name>") then has to
+        # look it up through the logged-models API (see mlflow/tracking/_model_registry/
+        # fluent.py). A tracking server that does not implement that API — DagsHub does not —
+        # fails with "Unable to find a logged_model with artifact_path ...". Writing the model
+        # under the run makes register_model take its classic branch, which every MLflow-
+        # compatible server supports.
+        #
+        # serialization_format is explicit because newer MLflow defaults to "skops", which
+        # refuses to serialize a SearchCV: it carries a scorer and a StratifiedKFold that
+        # skops treats as untrusted types.
+        artifact_path = "model-{}".format(model_name)
+        with tempfile.TemporaryDirectory() as tmp:
+            local_model_path = Path(tmp) / artifact_path
+            mlflow.sklearn.save_model(
+                model,
+                str(local_model_path),
+                serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
+            )
+            mlflow.log_artifacts(str(local_model_path), artifact_path=artifact_path)
 
     return model, metrics, run_id
