@@ -49,10 +49,13 @@ The three stages are strictly sequential — each consumes the previous one's ou
 **A Prefect server is not required for this**; the scripts run in Prefect's ephemeral mode.
 
 ```bash
-python scripts/run_etl.py                 # → data/processed/churn_cleaned.csv
-python scripts/run_experiments.py         # → MLflow runs + registered models in mlflow.db
-python scripts/run_batch_prediction.py    # → data/predictions/*.parquet + model_comparison_*.csv
+uv run python scripts/run_etl.py                 # → data/processed/churn_cleaned.csv
+uv run python scripts/run_experiments.py         # → MLflow runs + registered models in mlflow.db
+uv run python scripts/run_batch_prediction.py    # → data/predictions/*.parquet + comparison csv
 ```
+
+(`uv run` uses the project venv without activating it. Plain `python` works only inside an
+activated `.venv`.)
 
 Skipping a step fails the next: without step 1 training has no data, without step 2 the
 `models:/...@champion` URIs don't resolve.
@@ -117,8 +120,8 @@ not evidence that weekly retraining improves the models.
    deployment created with `prefect-cloud deploy` may be registered under the *function* name
    `weekly_pipeline/weekly-churn-analysis` rather than the flow's `@flow(name=...)`.
 
-**`FileNotFoundError: Kaggle credentials not found`** — `kaggle/kaggle.json` is missing.
-There is no environment-variable fallback; the file must exist.
+**`FileNotFoundError: Kaggle credentials not found`** — neither `KAGGLE_USERNAME` +
+`KAGGLE_KEY` in the environment nor `kaggle/kaggle.json` on disk. Either one works; env vars win.
 
 **MLflow model URI does not resolve** — `run_experiments.py` has not run against this
 `mlflow.db`, or `clean_slate.sh` wiped the registry. Re-run step 2.

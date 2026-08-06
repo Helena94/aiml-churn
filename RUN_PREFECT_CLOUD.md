@@ -199,7 +199,8 @@ Rules of thumb:
   the old backend and `prefect deployment run` reports *not found*.
 - Flow-run history does **not** move between backends. Local runs stay in `~/.prefect/prefect.db`,
   Cloud runs stay in the workspace.
-- MLflow is unaffected by the switch — it is always the local `mlflow.db` in the project root.
+- MLflow is unaffected by the Prefect profile — it follows `MLFLOW_TRACKING_URI`, and falls back
+  to the local `mlflow.db` when that is unset (§3.1a).
 - `scripts/clean_slate.sh` only clears **local** Prefect state; Cloud run history must be
   deleted from the Cloud UI.
 
