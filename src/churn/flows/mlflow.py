@@ -94,7 +94,14 @@ def run_with_mlflow(
         scalar_metrics = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
         mlflow.log_metrics(scalar_metrics)
 
-        # Log the trained model as an artifact
-        mlflow.sklearn.log_model(model, name="model-{}".format(model_name))
+        # Log the trained model as an artifact. The format is explicit because newer MLflow
+        # defaults to "skops", which refuses to serialize a SearchCV — it carries a scorer and
+        # a StratifiedKFold that skops treats as untrusted types. Pinning the format here keeps
+        # local and Prefect Cloud identical no matter which MLflow the container resolves.
+        mlflow.sklearn.log_model(
+            model,
+            name="model-{}".format(model_name),
+            serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
+        )
 
     return model, metrics, run_id
