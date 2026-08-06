@@ -12,7 +12,12 @@ requires-python = ">=3.10"
 # packages are kept out of here (see the `eda` group below).
 dependencies = [
     "kaggle>=1.6,<1.7",
-    "mlflow>=3.9.0",
+    # Pinned, not a floor: the Prefect Cloud container resolves this range fresh (it installs
+    # from `-e .`, not uv.lock), and newer MLflow releases changed two things that break the
+    # pipeline there — the default sklearn serialization format became "skops" (which refuses
+    # to serialize a SearchCV), and `runs:/<id>/<name>` stopped resolving for registration.
+    # 3.9.0 is the version the pipeline is developed and verified against.
+    "mlflow==3.9.0",
     "pandas>=2.3.3",
     "prefect>=3.6.13",
     "python-dotenv>=1.2.1",

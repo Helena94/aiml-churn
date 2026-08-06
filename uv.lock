@@ -559,7 +559,7 @@ eda = [
 [package.metadata]
 requires-dist = [
     { name = "kaggle", specifier = ">=1.6,<1.7" },
-    { name = "mlflow", specifier = ">=3.9.0" },
+    { name = "mlflow", specifier = "==3.9.0" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "prefect", specifier = ">=3.6.13" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
