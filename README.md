@@ -125,9 +125,11 @@ extract you want scored.
 
 When that file is missing, the flow's first task builds it from `fallback_source` and writes
 **only the held-out test split** — the same 20% `run_experiments.py` kept out of training, so
-the batch scores customers the models have never seen. An existing file is never overwritten,
-so dropping in a real extract takes precedence. Point a real pipeline at `input_path` and set
-`fallback_source: null` to turn the stand-in off; a missing input then fails the run.
+the batch scores customers the models have never seen. An existing file is rebuilt only once
+`fallback_source` is newer than it: a fresh ETL run re-splits the holdout, so keeping last
+week's batch would score rows the models were just trained on. Point a real pipeline at
+`input_path` and set `fallback_source: null` to turn the stand-in off — the task is then
+skipped entirely and your file is never touched; a missing input fails the run.
 
 The file must carry `customer_id` plus every column in `CATEGORICAL_COLUMNS` and
 `NUMERICAL_COLUMNS` from `features/schema.py`, with no duplicate IDs — `validate_batch_data`

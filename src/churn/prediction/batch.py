@@ -53,19 +53,22 @@ def prepare_batch_input(input_path: str | Path, source_path: str | Path) -> bool
     Build the batch input from the held-out test rows when no external extract has landed.
 
     Stands in for an upstream customer extract. Only the test split is written, so the
-    batch scores customers no model was fitted on. Existing files are left alone, so a
-    real extract always wins. Set `fallback_source: null` in the config to disable this.
+    batch scores customers no model was fitted on. An existing batch is rebuilt once the
+    cleaned data is newer than it, because every ETL run re-splits the holdout and a stale
+    batch would score rows the models were just trained on. Set `fallback_source: null` in
+    the config to turn the stand-in off entirely and protect a real extract.
 
     Args:
         input_path: Where the batch flow expects its input.
         source_path: Cleaned CSV to derive the batch from (the ETL output).
 
     Returns:
-        True if a file was written, False if the input already existed.
+        True if a file was written, False if the existing input was current.
     """
     path = Path(input_path)
-    if path.exists():
-        logger.info(f"Batch input already present at {path}, leaving it untouched")
+    source = Path(source_path)
+    if path.exists() and (not source.exists() or path.stat().st_mtime >= source.stat().st_mtime):
+        logger.info(f"Batch input at {path} is current, leaving it untouched")
         return False
 
     df = pd.read_csv(source_path)

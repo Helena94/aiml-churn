@@ -2,8 +2,9 @@ input_path: data/processed/batch_customers.parquet   # .csv is also accepted
 output_dir: data/predictions
 
 # Stand-in for an upstream customer extract: when input_path is missing, it is built
-# from this CSV (minus the target column). An existing input_path is never overwritten.
-# Set to null once a real extract lands at input_path.
+# from this CSV (minus the target column), and rebuilt whenever this CSV is newer than it
+# (a new ETL run re-splits the holdout). Set to null once a real extract lands at
+# input_path — that turns the stand-in off and leaves the file alone.
 fallback_source: data/processed/churn_cleaned.csv
 tracking_uri: null            # null -> the project-local sqlite mlflow.db
 

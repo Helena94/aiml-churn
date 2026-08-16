@@ -3,6 +3,8 @@
 Prefect tasks are exercised through `.fn()` to bypass the Prefect runtime.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -103,13 +105,30 @@ class TestPrepareBatchInput:
         expected = set(df.loc[split_train_test(df)[1].index, "customer_id"])
         assert set(pd.read_parquet(out)["customer_id"]) == expected
 
-    def test_existing_file_is_not_overwritten(self, tmp_path):
+    def test_current_file_is_not_overwritten(self, tmp_path):
         source = self._source(tmp_path)
         out = tmp_path / "batch.parquet"
         _batch_df(3).to_parquet(out, index=False)
 
         assert prepare_batch_input.fn(out, source) is False
         assert len(pd.read_parquet(out)) == 3
+
+    def test_stale_file_is_refreshed(self, tmp_path):
+        """A batch older than the cleaned data holds rows the models were just trained on."""
+        source = self._source(tmp_path)
+        out = tmp_path / "batch.parquet"
+        _batch_df(3).to_parquet(out, index=False)
+        os.utime(out, (0, 0))
+
+        assert prepare_batch_input.fn(out, source) is True
+        assert len(pd.read_parquet(out)) == 20  # rebuilt from the holdout
+
+    def test_missing_source_leaves_existing_file_alone(self, tmp_path):
+        out = tmp_path / "batch.parquet"
+        _batch_df(3).to_parquet(out, index=False)
+        os.utime(out, (0, 0))
+
+        assert prepare_batch_input.fn(out, tmp_path / "gone.csv") is False
 
 
 class TestLoadBatchData:

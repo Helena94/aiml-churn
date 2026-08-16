@@ -13,7 +13,7 @@ the project as a student deliverable.
 | 1 — parent flow | ✅ Built | `scripts/run_weekly.py`, ~35 lines. Sequential calls give the "failure stops downstream" requirement for free. |
 | 2 — deployment + schedule | ✅ Built | `flow.serve(schedule=CronSchedule(...), limit=1)`. Simpler than planned: no work pool or worker needed. |
 | 3 — ETL timeout | ✅ Built | `timeout_seconds` 30 → 900 in `scripts/run_etl.py`. Was a real latent bug — a cold Kaggle download can't finish in 30s. |
-| 4 — refresh generated batch | ⏭️ Skipped | `prepare_batch_input` already declines to overwrite an external extract, which is the correct behavior. |
+| 4 — refresh generated batch | ✅ Built | One mtime check in `prepare_batch_input`: a generated batch older than `fallback_source` is rebuilt, since each ETL run re-splits the holdout and the stale file would score training rows. A real extract is still protected — by `fallback_source: null`, which skips the task. |
 | 5 — drop `@champion`, `latest` aliases | ⏭️ Skipped | Wide refactor of `batch.py` + config + tests. Selecting the best classifier by `roc_auc` is defensible ML, and item 7's `consensus_prediction` would have re-introduced an authoritative answer by majority vote — a weaker decision rule than the one it replaced. |
 | 6 — require all three classifiers | ⏭️ Skipped | Turns working graceful degradation into a hard failure for no gain. |
 | 7 — agreement analysis | ◐ Built as a report | Aggregated into `model_comparison_*.csv` (per-model stats + agreement) instead of 8 derived columns on every row. Same analytical question, one small file, no row-level bloat. Per-customer columns remain easy to add in `generate_predictions`. |
