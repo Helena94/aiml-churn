@@ -6,8 +6,9 @@ dataset. Covers ETL (Prefect-orchestrated), feature engineering, model training 
 hyperparameter search, experiment tracking + model registry (MLflow), and batch scoring.
 
 **Setup guides:** [RUN_LOCAL.md](RUN_LOCAL.md) — everything on your machine.
-[RUN_PREFECT_CLOUD.md](RUN_PREFECT_CLOUD.md) — same code orchestrated by Prefect Cloud, and how
-to switch back and forth.
+[RUN_PREFECT_CLOUD.md](RUN_PREFECT_CLOUD.md) — same code orchestrated by Prefect Cloud, either
+executing locally or in a managed container. [SWITCHING.md](SWITCHING.md) — the two independent
+switches (Prefect profile and `MLFLOW_TRACKING_URI`) and how to tell where you are pointed.
 
 ## Run order
 
@@ -30,7 +31,7 @@ the `models:/...@champion` URIs don't resolve.
 The calls are sequential, so a failed stage stops everything downstream.
 
 ```bash
-uv run prefect profile use local   # CLI and serve() must share a backend — see RUN_LOCAL.md
+uv run prefect profile use local   # CLI and serve() must share a backend — see SWITCHING.md
 uv run prefect server start        # separate terminal — needed for the schedule to fire
 uv run python scripts/run_weekly.py   # keep running: serve() IS the deployment
 ```
@@ -75,6 +76,10 @@ Environment variables the pipeline reads, all optional:
 | `KAGGLE_USERNAME` / `KAGGLE_KEY` | Falls back to `kaggle/kaggle.json` |
 
 `.env` is optional and only holds `ANTHROPIC_API_KEY`; no pipeline stage needs it.
+
+`MLFLOW_TRACKING_URI` is one of the two switches between a local and a cloud setup — it is
+per-shell and silent, so a leftover `export` sends "local" runs to a remote server with no
+visible sign. [SWITCHING.md](SWITCHING.md) covers it and the Prefect profile together.
 
 ## Pipeline
 

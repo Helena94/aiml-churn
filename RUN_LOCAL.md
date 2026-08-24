@@ -3,6 +3,9 @@
 Everything runs on your machine: Prefect orchestration, MLflow tracking, and the data.
 No account and no internet needed (except the Kaggle download in step 1).
 
+For Prefect Cloud see [RUN_PREFECT_CLOUD.md](RUN_PREFECT_CLOUD.md); for moving between the two
+see [SWITCHING.md](SWITCHING.md).
+
 ## 0. Prerequisites
 
 | Need | How |
@@ -19,29 +22,39 @@ Nothing here needs environment variables. MLflow writes to the project-local `ml
 `KAGGLE_USERNAME` / `KAGGLE_KEY` are already in the environment — the remote paths are only used
 by the managed deployment in [RUN_PREFECT_CLOUD.md](RUN_PREFECT_CLOUD.md).
 
-## 1. Check which Prefect backend you are on
+## 1. Confirm you are actually local
 
-This is the single most common source of confusion — the CLI can be pointed at Prefect
-**Cloud** while you think you are running locally.
+The most common source of confusion in this project, and it has **two** independent causes.
+Check both — one command each:
 
 ```bash
-uv run prefect profile ls          # the * marks the active profile
-uv run prefect config view | grep API_URL
+uv run prefect config view | grep API_URL                    # orchestration
+echo "${MLFLOW_TRACKING_URI:-<unset — local mlflow.db>}"     # tracking
 ```
 
 For local work you want:
 
 ```
-PREFECT_API_URL='http://127.0.0.1:4200/api'
+PREFECT_API_URL='http://127.0.0.1:4200/api'      (or no API_URL line at all — ephemeral)
+MLFLOW_TRACKING_URI: <unset — local mlflow.db>
 ```
 
-If it shows an `api.prefect.cloud` URL instead, switch:
+**If the first line shows an `api.prefect.cloud` URL**, your flow runs are being recorded in a
+Cloud workspace. Switch back with `uv run prefect profile use local`. Check the profile exists
+first — `uv run prefect profile ls` prints them, and `local` is just a label; what matters is
+the API URL it sets. To run with no backend at all, `uv run prefect config unset PREFECT_API_URL`.
+
+**If the second line shows a URL**, every model you train is being registered on a *remote*
+server, not in `mlflow.db` — and nothing in the Prefect output will say so. This usually means a
+leftover `export` from a pre-deploy verification session
+([RUN_PREFECT_CLOUD.md §3.1b](RUN_PREFECT_CLOUD.md#31-one-time-setup)). Clear it:
 
 ```bash
-uv run prefect profile use local
+unset MLFLOW_TRACKING_URI MLFLOW_TRACKING_USERNAME MLFLOW_TRACKING_PASSWORD
 ```
 
-See [RUN_PREFECT_CLOUD.md](RUN_PREFECT_CLOUD.md) for going the other way.
+The two switches are unrelated and behave differently — the profile is persistent and global,
+the environment variable is per-shell and invisible. [SWITCHING.md](SWITCHING.md) covers both.
 
 ## 2. Run the pipeline
 
@@ -68,6 +81,10 @@ uv run mlflow ui --backend-store-uri sqlite:///mlflow.db     # http://127.0.0.1:
 
 Experiment runs, metrics, and the model registry (`telco-churn-model@champion` and the
 per-model aliases). Predictions are plain files under `data/predictions/`.
+
+Note the `--backend-store-uri` is spelled out, so this UI always shows the local `mlflow.db`
+regardless of `MLFLOW_TRACKING_URI`. If step 2 ran with that variable set, its runs are on the
+remote server and this UI will look empty — see section 1.
 
 ## 4. Optional: the local Prefect server + UI
 
@@ -116,15 +133,18 @@ not evidence that weekly retraining improves the models.
    process (section 5).
 2. Your CLI is on a different backend than the one that served the deployment. Compare
    `prefect config view | grep API_URL` in both terminals (section 1).
-3. The name really is different. `prefect deployment ls` prints the truth. Note that a
-   deployment created with `prefect-cloud deploy` may be registered under the *function* name
-   `weekly_pipeline/weekly-churn-analysis` rather than the flow's `@flow(name=...)`.
+3. The name really is different. `prefect deployment ls` prints the truth. A deployment created
+   with `prefect-cloud deploy` is registered under the entrypoint *function* name,
+   `weekly_pipeline/weekly-churn-analysis`, not the flow's `@flow(name=...)` — the address above
+   is the `serve()` one and applies here.
 
 **`FileNotFoundError: Kaggle credentials not found`** — neither `KAGGLE_USERNAME` +
 `KAGGLE_KEY` in the environment nor `kaggle/kaggle.json` on disk. Either one works; env vars win.
 
 **MLflow model URI does not resolve** — `run_experiments.py` has not run against this
-`mlflow.db`, or `clean_slate.sh` wiped the registry. Re-run step 2.
+`mlflow.db`, or `clean_slate.sh` wiped the registry. Re-run step 2. If step 2 *did* run, check
+`MLFLOW_TRACKING_URI` was the same for both stages — train remote and score local (or the
+reverse) and the `@champion` aliases resolve against the wrong registry (section 1).
 
 ## Reset
 
@@ -136,3 +156,9 @@ Kills running mlflow/prefect processes, then deletes the MLflow store (`mlflow.d
 `mlartifacts/`, every registered model and `@champion` alias), the prediction files, and the
 local Prefect run history. Keeps source, `configs/`, `data/raw/`, and `data/processed/` — so
 recovery is just steps 2 and 3 of the run order again.
+
+**It only cleans local state.** [`scripts/clean_slate.sh:27`](scripts/clean_slate.sh#L27) deletes
+`./mlflow.db` unconditionally and never reads `MLFLOW_TRACKING_URI`. With that variable set the
+script wipes a database your runs were not using, while the remote server keeps every experiment
+and registered model — a clean slate that is not one. Remote state has to be deleted from that
+server's own UI, and Cloud run history from the Prefect Cloud UI.
