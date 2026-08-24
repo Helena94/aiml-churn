@@ -12,6 +12,8 @@ and visualization.
 * **ETL Pipeline (Prefect):** ✅ Completed. Extracted, cleaned, validated, loaded to `data/processed/churn_cleaned.csv`.
 * **ML Training (MLflow + Prefect):** ✅ Completed. Four models trained in parallel, metrics/params/artifacts logged to
   MLflow, each registered with a `champion` alias, best classifier promoted to `telco-churn-model@champion`.
+  Each alias tracks the best version ever trained (by cross-validated `cv_score`), not the most recent —
+  a run that loses to the standing champion is never registered.
 * **Batch Predictions (Prefect):** ✅ Completed. `scripts/run_batch_prediction.py` scores a batch with the registered
   models. ⚠️ The input file `data/processed/batch_customers.parquet` is not produced by any script — supply it
   (see §4 step 3).
@@ -111,7 +113,11 @@ need to re-run.
 | random forest | `telco-churn-random-forest` | comparison probability column |
 | XGBoost | `telco-churn-xgboost` | comparison probability column |
 | kmeans | `telco-churn-segmentation` | `segment` column |
-| best classifier by `roc_auc` | `telco-churn-model` | primary — owns `churn_probability`, `churn_prediction`, `risk_group` |
+| best classifier by `cv_score` | `telco-churn-model` | primary — owns `churn_probability`, `churn_prediction`, `risk_group` |
 
-All carry a `champion` alias. kmeans never competes for primary (no `roc_auc`). In batch scoring a missing
-optional model is logged and skipped; a missing primary is a hard error.
+All carry a `champion` alias, and each alias holds the best version ever trained: `register_champion`
+skips registration entirely when a run doesn't beat the incumbent, so the aliases never regress and an
+unchanged re-run adds no versions. Ranking uses `cv_score` (the search's cross-validated `best_score_`),
+keeping the held-out test metrics purely for reporting. kmeans never competes for primary (its `cv_score`
+is a silhouette). In batch scoring a missing optional model is logged and skipped; a missing primary is a
+hard error.

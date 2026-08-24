@@ -118,9 +118,38 @@ After training, every model is registered under its own name with a `champion` a
 | XGBoost | `telco-churn-xgboost` |
 | kmeans | `telco-churn-segmentation` |
 
-The best classifier by `roc_auc` is additionally registered as `telco-churn-model` and
-aliased `@champion` — that's the primary model the batch flow scores with. kmeans never
-competes for primary (it has no `roc_auc`).
+The best classifier is additionally registered as `telco-churn-model` and aliased
+`@champion` — that's the primary model the batch flow scores with. kmeans never competes for
+primary (its score is a silhouette, not a roc_auc).
+
+#### `champion` = best ever trained, not newest
+
+A training run only enters the registry if it beats the standing champion for that model.
+A run that scores worse is left unregistered — the run and its model artifact are still in
+the MLflow experiment, they just never get a version — so `models:/<name>@champion` can only
+ever improve, and re-running training on unchanged data creates no new versions at all:
+
+```
+telco-churn-xgboost
+  v1  cv_score=0.8461   @champion     <- run 1
+                                      <- run 2 scored 0.8402: not registered
+  v2  cv_score=0.8513   @champion     <- run 3 beat it, alias moved
+```
+
+Promotion ranks on **`cv_score`**: the hyperparameter search's own cross-validated score
+(`best_score_`), computed on the training folds. The held-out test metrics are reporting-only
+by design — they already pick the model *type* within a run, and ranking across runs on them
+too would let the same 1,409 held-out rows steer selection over and over until the reported
+`roc_auc` reads better than the model really is. Both are logged to every run, so the MLflow
+UI shows the score that won the promotion next to the honest estimate of what it does.
+
+Two consequences worth knowing:
+
+- **Changing `scoring` in a `configs/<model>.yml` breaks comparability** with versions logged
+  before the change — the alias would be ranking two different quantities. Clear that
+  registered model (or run `scripts/clean_slate.sh`) if you change it.
+- The batch flow scores with whichever version the alias points at, which may now be an older
+  one. `model_version` in the prediction output always records which.
 
 ### Batch input
 

@@ -9,7 +9,7 @@ from prefect.futures import wait
 
 from churn.assets import CLEANED_DATA_ASSET, add_metadata, model_asset
 from churn.features.builder import split_train_test
-from churn.flows.mlflow import register_champion, run_with_mlflow
+from churn.flows.mlflow import SELECTION_METRIC, register_champion, run_with_mlflow
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -30,7 +30,9 @@ REGISTRY_NAMES = {
 }
 CLASSIFIERS = ("logistic_regression", "random_forest", "xgboost")
 PRIMARY_REGISTRY_NAME = "telco-churn-model"
-PRIMARY_METRIC = "roc_auc"
+# Ranks this run's classifiers against each other, and (inside register_champion) each
+# model against its own past versions — one metric so both comparisons agree.
+PRIMARY_METRIC = SELECTION_METRIC
 
 # Asset keys are derived from the registry names so the two can't drift.
 MODEL_ASSETS = {name: model_asset(registry) for name, registry in REGISTRY_NAMES.items()}
@@ -47,15 +49,26 @@ def run_experiment(model_name: str, config, X_train, X_test, y_train, y_test):
 
 @materialize(*MODEL_ASSETS.values(), PRIMARY_ASSET, asset_deps=[CLEANED_DATA_ASSET])
 def register_models(results: list[tuple[str, dict, str]]) -> None:
-    """Register every trained model under its own name, then alias the best classifier as primary."""
-    for model_name, metrics, run_id in results:
-        version = register_champion(run_id, model_name, REGISTRY_NAMES[model_name])
-        logger.info(f"Registered {REGISTRY_NAMES[model_name]} v{version} (champion)")
-        # Nested values (the confusion matrix) don't render as asset metadata.
-        scalars = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
-        add_metadata(MODEL_ASSETS[model_name], {"version": version, **scalars})
+    """Promote every trained model that beats its own champion, then re-contest the primary alias.
 
-    # kmeans is clustering — it has no roc_auc and never competes for primary.
+    A model that loses to its incumbent is not registered at all, so each `@champion` points
+    at the best version ever trained rather than the most recent one.
+    """
+    for model_name, metrics, run_id in results:
+        version, promoted = register_champion(run_id, model_name, REGISTRY_NAMES[model_name])
+        registry = REGISTRY_NAMES[model_name]
+        logger.info(
+            f"{registry}: champion {'promoted to' if promoted else 'unchanged at'} v{version}"
+            + ("" if promoted else " — this run did not beat it, nothing registered")
+        )
+        metadata = {"champion_version": version, "promoted": promoted}
+        if promoted:
+            # Only attach this run's numbers when they actually describe the champion.
+            # Nested values (the confusion matrix) don't render as asset metadata.
+            metadata.update({k: v for k, v in metrics.items() if isinstance(v, (int, float))})
+        add_metadata(MODEL_ASSETS[model_name], metadata)
+
+    # kmeans is clustering — its cv_score is a silhouette, so it never competes for primary.
     ranked = [(m, mx) for m, mx, _ in results if m in CLASSIFIERS and PRIMARY_METRIC in mx]
     if not ranked:
         logger.warning(f"No classifier reported {PRIMARY_METRIC}; skipping {PRIMARY_REGISTRY_NAME}")
@@ -63,12 +76,18 @@ def register_models(results: list[tuple[str, dict, str]]) -> None:
 
     best_name = max(ranked, key=lambda r: r[1][PRIMARY_METRIC])[0]
     best_run_id = next(r for m, _, r in results if m == best_name)
-    version = register_champion(best_run_id, best_name, PRIMARY_REGISTRY_NAME)
-    logger.info(f"Primary champion: {best_name} -> {PRIMARY_REGISTRY_NAME} v{version}")
-    add_metadata(
-        PRIMARY_ASSET,
-        {"version": version, "model": best_name, PRIMARY_METRIC: dict(ranked)[best_name][PRIMARY_METRIC]},
-    )
+    version, promoted = register_champion(best_run_id, best_name, PRIMARY_REGISTRY_NAME)
+    if promoted:
+        logger.info(f"Primary champion: {best_name} -> {PRIMARY_REGISTRY_NAME} v{version}")
+    else:
+        logger.info(
+            f"Primary champion unchanged at {PRIMARY_REGISTRY_NAME} v{version} — "
+            f"this run's best ({best_name}) did not beat it"
+        )
+    metadata = {"champion_version": version, "promoted": promoted}
+    if promoted:
+        metadata.update({"model": best_name, PRIMARY_METRIC: dict(ranked)[best_name][PRIMARY_METRIC]})
+    add_metadata(PRIMARY_ASSET, metadata)
 
 
 @flow(name="run_experiments")
